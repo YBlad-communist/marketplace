@@ -16,6 +16,7 @@ enum UserRole {
 enum ListingStatus {
   PENDING
   ACTIVE
+  RESERVED
   SOLD
   REJECTED
   ARCHIVED

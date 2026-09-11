@@ -48,3 +48,12 @@ export async function enqueueTokenCleanup(): Promise<void> {
     jobId: 'cleanup-tokens-repeat',
   });
 }
+
+export async function enqueueExpiredHoldsCheck(): Promise<void> {
+  await getQueue(QUEUES.MAINTENANCE).add(MAINTENANCE_JOBS.CHECK_EXPIRED_HOLDS, {}, {
+    repeat: { every: 6 * 3600_000 },
+    jobId: 'expired-holds-repeat',
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 60_000 },
+  });
+}

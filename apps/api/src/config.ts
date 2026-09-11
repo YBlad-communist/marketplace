@@ -45,6 +45,9 @@ const envSchema = z.object({
   STRIPE_CONNECT_ONBOARDING_URL: z.string().default('http://localhost:3000/seller/connect'),
   STRIPE_PLATFORM_FEE_BASIS_POINTS: z.coerce.number().default(200),
 
+  // Email администратора для уведомлений о спорах/чарджбэках (опционально).
+  ADMIN_EMAIL: z.string().email().optional(),
+
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URL: z.string().optional(),

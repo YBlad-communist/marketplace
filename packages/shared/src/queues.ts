@@ -34,4 +34,5 @@ export const NOTIFICATION_JOBS = {
 export const MAINTENANCE_JOBS = {
   CLEANUP_TOKENS: 'cleanup-tokens',
   CLEANUP_EXPIRED: 'cleanup-expired',
+  CHECK_EXPIRED_HOLDS: 'check-expired-holds',
 } as const;

@@ -13,6 +13,7 @@ import { logger } from './mailer.js';
 import { sendEmail } from './mailer.js';
 import { sendSms } from './smsru.js';
 import { cleanupExpiredTokens } from './cleanup.js';
+import { checkExpiredHoldsJob } from './expiredHolds.js';
 import { processImageJob } from './imageJob.js';
 import { moderateListingJob } from './moderationJob.js';
 import { savedSearchNotificationJob } from './notificationJob.js';
@@ -120,6 +121,9 @@ export function createWorkers(): Worker[] {
         ) {
           await cleanupExpiredTokens();
           logger.info({ jobName: job.name }, 'expired tokens cleaned');
+        } else if (job.name === MAINTENANCE_JOBS.CHECK_EXPIRED_HOLDS) {
+          const result = await checkExpiredHoldsJob();
+          logger.info({ jobName: job.name, ...result }, 'expired holds checked');
         } else {
           throw new Error(`unknown maintenance job: ${job.name}`);
         }

@@ -39,6 +39,7 @@ packages/db/prisma/migrations/dev/
 # misc
 .vercel
 .tsbuildinfo
+*.tsbuildinfo
 
 # local infra dumps / committed env duplicates
 dump.rdb

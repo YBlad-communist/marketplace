@@ -30,6 +30,30 @@ export function platformFeeBasisPoints(): number {
   return env.STRIPE_PLATFORM_FEE_BASIS_POINTS;
 }
 
+/**
+ * Возврат объявления в выдачу после отмены/провала оплаты.
+ * Трогаем только RESERVED, чтобы случайно не реактивировать
+ * отклонённое модератором или снятое продавцом объявление.
+ */
+async function unlockListing(listingId: string): Promise<void> {
+  await prisma.listing.updateMany({
+    where: { id: listingId, status: 'RESERVED' },
+    data: { status: 'ACTIVE' },
+  });
+}
+
+/** Уведомление администратора о споре (если задан ADMIN_EMAIL). */
+async function notifyAdmin(subject: string, text: string): Promise<void> {
+  if (!env.ADMIN_EMAIL) return;
+  await enqueueEmail({
+    to: env.ADMIN_EMAIL,
+    subject,
+    template: 'order-updated',
+    templateData: {},
+    text,
+  }).catch((err) => logger.warn({ err }, 'admin dispute notification failed'));
+}
+
 export async function ensureSellerStripeAccount(sellerId: string): Promise<{ accountId: string; url: string | null }> {
   const s = getStripe();
   const seller = await prisma.user.findUnique({ where: { id: sellerId } });
@@ -121,16 +145,31 @@ export async function createEscrowOrder(input: {
       stripePaymentIntentId: paymentIntent.id,
       idempotencyKey: input.idempotencyKey,
     },
-  }).catch((err: unknown) => {
+  }).catch(async (err: unknown) => {
     // Гонка двух параллельных POST /orders: второй получает 409, а не 500.
+    // Созданный нами PaymentIntent отменяем, чтобы не висел сиротой-холдом.
     if (
       typeof err === 'object' && err !== null &&
       'code' in err && (err as { code?: string }).code === 'P2002'
     ) {
+      await s.paymentIntents.cancel(paymentIntent.id).catch(() => undefined);
       throw new AppError(errorCodes.CONFLICT, 'По этому объявлению уже есть заказ', 409);
     }
     throw err;
   });
+
+  // Резервируем объявление на время оплаты: уходит из выдачи (фильтр ACTIVE),
+  // повторная покупка упрётся в проверку статуса выше с понятным 409.
+  const reserved = await prisma.listing.updateMany({
+    where: { id: listing.id, status: 'ACTIVE' },
+    data: { status: 'RESERVED' },
+  });
+  if (reserved.count === 0) {
+    // Статус увели из-под нас (модерация/снятие) — откатываем заказ и холд.
+    await prisma.order.delete({ where: { id: order.id } }).catch(() => undefined);
+    await s.paymentIntents.cancel(paymentIntent.id).catch(() => undefined);
+    throw new AppError(errorCodes.CONFLICT, 'Объявление недоступно для покупки', 409);
+  }
 
   return { order, clientSecret: paymentIntent.client_secret ?? '' };
 }
@@ -223,6 +262,7 @@ export async function refundOrder(orderId: string, actorId: string, role: string
     where: { id: order.id },
     data: { status: 'REFUNDED' },
   });
+  await unlockListing(order.listingId);
 }
 
 /** Вебхук Stripe: проверка подписи + идемпотентная обработка */
@@ -292,13 +332,19 @@ export async function handleStripeWebhook(
     case 'payment_intent.payment_failed':
     case 'payment_intent.canceled': {
       // Оплата не состоялась — удаляем PENDING-заказ, чтобы не блокировать
-      // повторную покупку (createEscrowOrder запрещает второй заказ на листинг).
+      // повторную покупку (createEscrowOrder запрещает второй заказ на листинг),
+      // и снимаем резерв с объявления.
       const pi = event.data.object as Stripe.PaymentIntent;
       const orderKey = pi.metadata?.orderKey;
       if (orderKey) {
-        await prisma.order.deleteMany({
+        const doomed = await prisma.order.findFirst({
           where: { idempotencyKey: orderKey, status: 'PENDING' },
+          select: { id: true, listingId: true },
         });
+        if (doomed) {
+          await prisma.order.delete({ where: { id: doomed.id } });
+          await unlockListing(doomed.listingId);
+        }
       }
       break;
     }
@@ -313,10 +359,71 @@ export async function handleStripeWebhook(
     case 'charge.refunded': {
       const charge = event.data.object as Stripe.Charge;
       if (charge.payment_intent && typeof charge.payment_intent === 'string') {
-        await prisma.order.updateMany({
+        const target = await prisma.order.findFirst({
           where: { stripePaymentIntentId: charge.payment_intent },
-          data: { status: 'REFUNDED' },
+          select: { id: true, listingId: true, status: true },
         });
+        if (target && target.status !== 'REFUNDED') {
+          await prisma.order.update({
+            where: { id: target.id },
+            data: { status: 'REFUNDED' },
+          });
+          await unlockListing(target.listingId);
+        }
+      }
+      break;
+    }
+    case 'charge.dispute.created': {
+      // Чарджбэк: покупатель оспорил платёж через банк. Платформа фиксирует
+      // спор и зовёт администратора, деньги Stripe может списать обратно.
+      const dispute = event.data.object as Stripe.Dispute;
+      const piId = await resolveDisputePaymentIntent(dispute);
+      if (piId) {
+        const marked = await prisma.order.updateMany({
+          where: { stripePaymentIntentId: piId, status: { notIn: ['REFUNDED', 'DISPUTED'] } },
+          data: { status: 'DISPUTED' },
+        });
+        if (marked.count > 0) {
+          logger.warn({ piId, disputeId: dispute.id }, 'chargeback dispute opened');
+          await notifyAdmin(
+            'Открыт спор по платежу (chargeback)',
+            `Dispute ${dispute.id} по PaymentIntent ${piId} на сумму ${dispute.amount}. Заказ переведён в DISPUTED, требуется решение.`
+          );
+        }
+      }
+      break;
+    }
+    case 'charge.dispute.closed': {
+      // Спор закрыт: won — деньги остались у платформы, заказ ждёт
+      // подтверждения покупателя; lost — возврат + снятие резерва.
+      // Переходы только из DISPUTED, чтобы не затереть параллельный release.
+      const dispute = event.data.object as Stripe.Dispute;
+      const piId = await resolveDisputePaymentIntent(dispute);
+      if (piId && (dispute.status === 'won' || dispute.status === 'lost')) {
+        if (dispute.status === 'lost') {
+          const lost = await prisma.order.findFirst({
+            where: { stripePaymentIntentId: piId, status: 'DISPUTED' },
+            select: { id: true, listingId: true },
+          });
+          if (lost) {
+            await prisma.order.update({
+              where: { id: lost.id },
+              data: { status: 'REFUNDED' },
+            });
+            await unlockListing(lost.listingId);
+            logger.warn({ piId, disputeId: dispute.id }, 'chargeback lost, order refunded');
+            await notifyAdmin(
+              'Спор проигран, заказ возвращён',
+              `Dispute ${dispute.id} по PaymentIntent ${piId} проигран. Заказ переведён в REFUNDED.`
+            );
+          }
+        } else {
+          await prisma.order.updateMany({
+            where: { stripePaymentIntentId: piId, status: 'DISPUTED' },
+            data: { status: 'PAID' },
+          });
+          logger.info({ piId, disputeId: dispute.id }, 'chargeback won, order back to PAID');
+        }
       }
       break;
     }
@@ -331,4 +438,23 @@ export async function createStripeConnectAccount(sellerId: string): Promise<{ ac
   const account = await s.accounts.create({ type: 'express' });
   await prisma.user.update({ where: { id: sellerId }, data: { stripeAccountId: account.id } });
   return { accountId: account.id };
+}
+
+/**
+ * Связка Dispute -> PaymentIntent.
+ * Новые версии API отдают payment_intent прямо в объекте спора,
+ * для старых — достаём через charge.
+ */
+async function resolveDisputePaymentIntent(dispute: Stripe.Dispute): Promise<string | null> {
+  const direct = (dispute as unknown as { payment_intent?: unknown }).payment_intent;
+  if (typeof direct === 'string') return direct;
+  const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
+  if (!chargeId) return null;
+  try {
+    const charge = await getStripe().charges.retrieve(chargeId);
+    return typeof charge.payment_intent === 'string' ? charge.payment_intent : null;
+  } catch (err) {
+    logger.warn({ err, chargeId }, 'stripe dispute charge lookup failed');
+    return null;
+  }
 }

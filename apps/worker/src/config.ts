@@ -22,6 +22,10 @@ export const env = {
   S3_SECRET_ACCESS_KEY: process.env.S3_SECRET_ACCESS_KEY ?? 'minioadmin',
   S3_PUBLIC_BASE_URL: process.env.S3_PUBLIC_BASE_URL ?? 'http://localhost:9000/marketplace',
   LOG_LEVEL: process.env.LOG_LEVEL ?? 'info',
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ?? '',
+  // Возраст PAID-заказа в днях, после которого холд считаем истёкшим
+  // (Stripe отменяет manual-capture авторизации примерно через 7 дней).
+  STRIPE_HOLD_TTL_DAYS: Number(process.env.STRIPE_HOLD_TTL_DAYS ?? 7),
 };
 
 export const isProd = env.NODE_ENV === 'production';

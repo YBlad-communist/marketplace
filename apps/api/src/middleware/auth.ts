@@ -8,6 +8,7 @@ import {
 } from '../services/tokenService.js';
 import { getRedis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
+import { refreshCookieName, refreshCookieOptions } from '../lib/cookies.js';
 
 declare global {
   namespace Express {
@@ -120,21 +121,16 @@ export function isModeratorRole(role: string): boolean {
  */
 export async function refreshAccessIfNeeded(req: Request, res: Response, next: NextFunction) {
   try {
-    const refresh = extractTokenFromCookie(req, 'refresh_token');
+    const refresh = extractTokenFromCookie(req, refreshCookieName);
     const access = extractBearer(req);
     if (!access && refresh) {
       const { token, user } = await rotateRefreshToken(refresh, {
         userAgent: req.headers['user-agent'],
         ip: req.ip,
       });
-      res.cookie('refresh_token', token, {
-        httpOnly: true,
-        secure: envCookieSecure(),
-        sameSite: 'strict',
-        maxAge: 30 * 86400_000,
-        path: '/',
-      });
+      res.cookie(refreshCookieName, token, refreshCookieOptions);
       req.userId = user.id;
+      req.userRole = user.role;
       next();
     } else if (access) {
       next();
@@ -145,8 +141,4 @@ export async function refreshAccessIfNeeded(req: Request, res: Response, next: N
     logger.debug({ err }, 'refresh-if-needed skipped');
     next();
   }
-}
-
-function envCookieSecure(): boolean {
-  return process.env.COOKIE_SECURE === 'true';
 }

@@ -6,7 +6,7 @@ import { connectRedis, disconnectRedis } from './lib/redis.js';
 import { initSocket } from './lib/socket.js';
 import { logger } from './lib/logger.js';
 import { closeQueues } from './queues/index.js';
-import { enqueueTokenCleanup } from './services/notificationService.js';
+import { enqueueTokenCleanup, enqueueExpiredHoldsCheck } from './services/notificationService.js';
 
 async function main() {
   await connectRedis();
@@ -22,6 +22,7 @@ async function main() {
   });
 
   await enqueueTokenCleanup().catch(() => undefined);
+  await enqueueExpiredHoldsCheck().catch(() => undefined);
 
   const shutdown = async (signal: string) => {
     logger.info(`received ${signal}, shutting down`);

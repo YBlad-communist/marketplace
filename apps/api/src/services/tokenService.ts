@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
-import { prisma } from '@marketplace/db';
+import { prisma, cleanupExpiredTokens as runSharedCleanup } from '@marketplace/db';
 import { AppError, errorCodes } from '@marketplace/shared';
 import { env } from '../config.js';
 import { getRedis } from '../lib/redis.js';
@@ -170,7 +170,6 @@ export async function revokeRefreshToken(token: string): Promise<void> {
 }
 
 export async function cleanupExpiredTokens(): Promise<void> {
-  await prisma.refreshTokenFamily.deleteMany({
-    where: { OR: [{ expiresAt: { lt: new Date() } }, { revokedAt: { not: null } }] },
-  });
+  // Реализация — в @marketplace/db, здесь оставлена обёртка для совместимости.
+  await runSharedCleanup();
 }

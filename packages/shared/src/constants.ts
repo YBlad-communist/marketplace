@@ -8,7 +8,7 @@ export const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'] as c
 export const ALLOWED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp'] as const;
 
 export const USER_ROLES = ['USER', 'MODERATOR', 'ADMIN'] as const;
-export const LISTING_STATUSES = ['PENDING', 'ACTIVE', 'SOLD', 'REJECTED', 'ARCHIVED'] as const;
+export const LISTING_STATUSES = ['PENDING', 'ACTIVE', 'RESERVED', 'SOLD', 'REJECTED', 'ARCHIVED'] as const;
 export const ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASED', 'REFUNDED', 'DISPUTED'] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
