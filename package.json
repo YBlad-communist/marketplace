@@ -1,0 +1,27 @@
+{
+  "name": "marketplace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack marketplace (Avito-like) — Next.js + Express + PostgreSQL + Redis + Stripe Connect",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -n web,api,worker -c cyan,magenta,yellow \"pnpm --filter @marketplace/web dev\" \"pnpm --filter @marketplace/api dev\" \"pnpm --filter @marketplace/worker dev\"",
+    "build": "pnpm --filter @marketplace/shared build && pnpm --filter @marketplace/db build && pnpm --filter @marketplace/api build && pnpm --filter @marketplace/web build && pnpm --filter @marketplace/worker build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "test:e2e": "pnpm --filter @marketplace/web test:e2e",
+    "db:generate": "pnpm --filter @marketplace/db db:generate",
+    "db:migrate": "pnpm --filter @marketplace/db db:migrate",
+    "db:deploy": "pnpm --filter @marketplace/db db:deploy",
+    "db:seed": "pnpm --filter @marketplace/db db:seed",
+    "audit": "pnpm audit --prod"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2"
+  }
+}

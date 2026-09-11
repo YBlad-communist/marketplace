@@ -1,0 +1,234 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand: #3b82f6;
+}
+
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
+
+/* Видимый фокус для клавиатурной навигации (a11y) */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-primary {
+  @apply btn bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:scale-[0.98];
+}
+
+.btn-secondary {
+  @apply btn border border-gray-300 bg-white text-gray-700 hover:border-gray-400 hover:bg-gray-50 active:scale-[0.98];
+}
+
+.btn-danger {
+  @apply btn bg-red-600 text-white hover:bg-red-700 active:scale-[0.98];
+}
+
+.input {
+  @apply w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30;
+}
+
+.label {
+  @apply mb-1 block text-sm font-medium text-gray-700;
+}
+
+.card {
+  @apply rounded-2xl border border-gray-200 bg-white shadow-sm;
+}
+
+/* Заголовки разделов */
+.section-title {
+  @apply text-2xl font-bold tracking-tight;
+}
+
+/* Вторичный текст с достаточным контрастом (AA на белом) */
+.muted {
+  @apply text-sm text-gray-600;
+}
+
+.muted-xs {
+  @apply text-xs text-gray-600;
+}
+
+/* Бейджи статусов */
+.badge {
+  @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-medium;
+}
+
+.badge-green {
+  @apply badge bg-green-100 text-green-800;
+}
+
+.badge-red {
+  @apply badge bg-red-100 text-red-800;
+}
+
+.badge-gray {
+  @apply badge bg-gray-100 text-gray-700;
+}
+
+.badge-amber {
+  @apply badge bg-amber-100 text-amber-800;
+}
+
+.badge-blue {
+  @apply badge bg-blue-100 text-blue-800;
+}
+
+/* Скелетоны загрузки */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+.skeleton {
+  @apply rounded-xl bg-gray-200;
+  background-image: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.4s linear infinite;
+}
+
+/* Пустые состояния */
+.empty-state {
+  @apply mx-auto flex max-w-md flex-col items-center px-4 py-12 text-center;
+}
+
+/* Анимация «печатает…» в чате */
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.typing-dot {
+  @apply inline-block h-1.5 w-1.5 rounded-full bg-gray-500;
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* ---------- Переходы между страницами ---------- */
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.page-enter {
+  animation: page-enter 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform, filter;
+}
+
+@keyframes page-slide-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(64px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes page-slide-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-64px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+    filter: blur(0);
+  }
+}
+
+/* Переход на пункт панели правее — страница въезжает справа */
+.page-slide-right {
+  animation: page-slide-from-right 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform, filter;
+}
+
+/* Переход на пункт панели левее — страница въезжает слева */
+.page-slide-left {
+  animation: page-slide-from-left 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform, filter;
+}
+
+/* Тонкий прогресс-бар навигации (сверху, фирменный синий) */
+@keyframes route-progress {
+  0% {
+    transform: scaleX(0);
+    opacity: 1;
+  }
+  70% {
+    transform: scaleX(0.85);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+
+.route-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  height: 3px;
+  background: linear-gradient(90deg, var(--brand), #60a5fa);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+  transform-origin: left;
+  animation: route-progress 1.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .page-slide-right,
+  .page-slide-left,
+  .route-progress {
+    animation: none;
+  }
+}

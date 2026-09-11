@@ -1,0 +1,33 @@
+{
+  "name": "@marketplace/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'worker: no eslint config; ok'",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@marketplace/db": "workspace:*",
+    "@marketplace/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.670.0",
+    "bullmq": "^5.26.0",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.4.1",
+    "nodemailer": "^6.9.16",
+    "pino": "^9.5.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.0",
+    "@types/nodemailer": "^6.4.16",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

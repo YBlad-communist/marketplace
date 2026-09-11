@@ -1,0 +1,335 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+}
+
+enum ListingStatus {
+  PENDING
+  ACTIVE
+  SOLD
+  REJECTED
+  ARCHIVED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  RELEASED
+  REFUNDED
+  DISPUTED
+}
+
+enum AttributeType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  SELECT
+  RANGE
+}
+
+enum ReportTargetType {
+  LISTING
+  USER
+  MESSAGE
+}
+
+enum ReportReason {
+  SPAM
+  FRAUD
+  INAPPROPRIATE
+  COPYRIGHT
+  DUPLICATE
+  PROHIBITED
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  RESOLVED
+  DISMISSED
+}
+
+model User {
+    id                 String                     @id @default(cuid())
+    email              String?                    @unique
+    phone              String?                    @unique
+  passwordHash       String?
+  name               String
+  avatarUrl          String?
+  city               String?
+  role               UserRole                   @default(USER)
+  isVerified         Boolean                    @default(false)
+  isBanned           Boolean                    @default(false)
+  banReason          String?
+  rating             Float                      @default(0)
+  ratingCount        Int                        @default(0)
+  stripeAccountId    String?
+  stripeOnboarded    Boolean                    @default(false)
+  googleId           String?                    @unique
+  emailVerifiedAt    DateTime?
+  phoneVerifiedAt    DateTime?
+  loginFailCount     Int                        @default(0)
+  lockUntil          DateTime?
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  listings           Listing[]
+  sentMessages       Message[]                  @relation("sender")
+  conversationParts  ConversationParticipant[]
+  reviewsReceived    Review[]                   @relation("reviewee")
+  reviewsAuthored    Review[]                   @relation("author")
+  favorites          Favorite[]
+  orders             Order[]                    @relation("buyer")
+  reportsAuthored    Report[]                   @relation("author")
+  viewedListings     ViewedListing[]
+  savedSearches      SavedSearch[]
+  verificationCodes  VerificationCode[]
+
+  @@index([city])
+}
+
+model Category {
+  id         String            @id @default(cuid())
+  name       String
+  slug       String            @unique
+  icon       String?
+  parentId   String?
+  parent     Category?         @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children   Category[]        @relation("CategoryTree")
+  attributes CategoryAttribute[]
+  listings   Listing[]
+  sortOrder  Int               @default(0)
+
+  @@index([parentId])
+}
+
+model CategoryAttribute {
+  id           String        @id @default(cuid())
+  categoryId   String
+  category     Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  key          String
+  label        String
+  type         AttributeType
+  unit         String?
+  required     Boolean       @default(false)
+  options      Json? // для SELECT: ["new","used"] и т.п.
+  min          Float?
+  max          Float?
+  sortOrder    Int           @default(0)
+
+  @@unique([categoryId, key])
+}
+
+model Listing {
+  id          String            @id @default(cuid())
+  title       String
+  description String
+  price       Decimal           @db.Decimal(12, 2)
+  currency    String            @default("EUR")
+  status      ListingStatus     @default(PENDING)
+  sellerId    String
+  seller      User              @relation(fields: [sellerId], references: [id])
+  categoryId  String
+  category    Category          @relation(fields: [categoryId], references: [id])
+  city        String
+  lat         Float?
+  lng         Float?
+  attributes  Json              @default("{}")
+  viewsCount  Int               @default(0)
+  searchTs    Unsupported("tsvector")?
+  moderationNote String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  images       ListingImage[]
+  favoritedBy  Favorite[]
+  conversations Conversation[]
+  order        Order?
+  viewedBy     ViewedListing[]
+
+  @@index([categoryId, status, city])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([status, price])
+  @@index([sellerId, status])
+  @@index([city, status])
+}
+
+model ListingImage {
+  id        String   @id @default(cuid())
+  listingId String
+  key       String   @unique
+  url       String
+  thumbUrl  String?
+  width     Int?
+  height    Int?
+  position  Int
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, position])
+}
+
+model Conversation {
+  id           String   @id @default(cuid())
+  listingId    String
+  listing      Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  participants ConversationParticipant[]
+  messages     Message[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([listingId])
+}
+
+model ConversationParticipant {
+  conversationId String
+  userId         String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id])
+  lastReadAt     DateTime?
+
+  @@id([conversationId, userId])
+  @@index([userId, lastReadAt])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation("sender", fields: [senderId], references: [id])
+  text           String
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+model Order {
+  id                       String      @id @default(cuid())
+  listingId                String      @unique
+  listing                  Listing     @relation(fields: [listingId], references: [id])
+  buyerId                  String
+  buyer                    User        @relation("buyer", fields: [buyerId], references: [id])
+  amount                   Decimal     @db.Decimal(12, 2)
+  currency                 String      @default("EUR")
+  status                   OrderStatus @default(PENDING)
+  stripePaymentIntentId    String?
+  stripeTransferId         String?
+  platformFee              Decimal?    @db.Decimal(12, 2)
+  releasedAt               DateTime?
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+  idempotencyKey           String?     @unique
+  reviews                  Review[]
+
+  @@index([buyerId, createdAt])
+  @@index([status])
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  authorId   String
+  author     User     @relation("author", fields: [authorId], references: [id])
+  revieweeId String
+  reviewee   User     @relation("reviewee", fields: [revieweeId], references: [id])
+  orderId    String?
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  rating     Int
+  text       String?
+  createdAt  DateTime @default(now())
+
+  @@unique([authorId, revieweeId, orderId])
+  @@index([revieweeId])
+}
+
+model Favorite {
+  userId    String
+  listingId String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, listingId])
+  @@index([listingId])
+}
+
+model ViewedListing {
+  userId    String
+  listingId String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  viewedAt  DateTime @default(now()) @updatedAt
+
+  @@id([userId, listingId])
+  @@index([userId, viewedAt])
+}
+
+model VerificationCode {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose   String // EMAIL_VERIFY, PHONE_VERIFY, PASSWORD_RESET
+  channel   String // EMAIL, PHONE
+  target    String
+  codeHash  String
+  attempts  Int       @default(0)
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([purpose, userId])
+  @@index([target, purpose, consumedAt])
+}
+
+model SavedSearch {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  query     Json // фильтры поиска
+  notifyNew Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Report {
+  id         String            @id @default(cuid())
+  authorId   String
+  author     User              @relation("author", fields: [authorId], references: [id])
+  targetType ReportTargetType
+  targetId   String
+  reason     ReportReason
+  comment    String?
+  status     ReportStatus      @default(PENDING)
+  resolvedBy String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model RefreshTokenFamily {
+  id        String    @id @default(cuid())
+  userId    String
+  familyId  String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  replacedBy String?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+}

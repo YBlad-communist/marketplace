@@ -1,0 +1,11 @@
+node_modules
+apps/*/node_modules
+apps/*/.next
+apps/*/dist
+packages/*/dist
+dump.rdb
+.git
+.env
+apps/*/.env
+apps/*/.env.local
+*.log
