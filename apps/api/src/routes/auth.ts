@@ -3,11 +3,14 @@ import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
+  oauthExchangeSchema,
   refreshTokenSchema,
   registerSchema,
   requestVerificationSchema,
   resetPasswordSchema,
   verifyEmailSchema,
+  AppError,
+  errorCodes,
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate, extractTokenFromCookie } from '../middleware/auth.js';
@@ -170,10 +173,30 @@ router.get('/oauth/google/callback', async (req, res, next) => {
       ip: req.ip,
     });
     setRefreshCookie(res, result.refreshToken);
-    res.redirect(`${env.APP_URL}/oauth/success?token=${encodeURIComponent(result.accessToken)}`);
+    // В URL отдаём только одноразовый код обмена, сам access-токен
+    // фронт заберёт через POST /api/auth/oauth/exchange.
+    const loginCode = await oauthService.createLoginCode(result.accessToken);
+    res.redirect(`${env.APP_URL}/oauth/success?code=${encodeURIComponent(loginCode)}`);
   } catch (err) {
     next(err);
   }
 });
+
+router.post(
+  '/oauth/exchange',
+  ipRateLimit('auth:oauth-exchange', 60_000, 10),
+  validate(oauthExchangeSchema),
+  async (req, res, next) => {
+    try {
+      const accessToken = await oauthService.consumeLoginCode(req.body.code);
+      if (!accessToken) {
+        throw new AppError(errorCodes.UNAUTHORIZED, 'Код обмена недействителен или истёк', 401);
+      }
+      res.json({ data: { accessToken } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 export default router;

@@ -88,7 +88,7 @@ export function initSocket(httpServer: http.Server): Server {
           socket.to(`user:${otherId}`).emit('message:new', message);
           const online = await redis.sismember('ws:online', otherId);
           if (!online) {
-            await enqueueOfflineNotification(otherId, payload.conversationId, payload.text);
+            await enqueueOfflineNotification(otherId, payload.conversationId, text);
           }
         }
         cb?.({ ok: true, message });

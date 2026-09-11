@@ -30,6 +30,27 @@ export async function createOAuthState(): Promise<string> {
   return state;
 }
 
+/**
+ * Одноразовый код обмена access-токена после OAuth.
+ * В URL редиректа едет только code (5 мин, одно использование),
+ * сам токен отдаётся через POST /api/auth/oauth/exchange и в URL не светится.
+ */
+export async function createLoginCode(accessToken: string): Promise<string> {
+  const code = crypto.randomBytes(32).toString('base64url');
+  const redis = getRedis();
+  await redis.setex(`oauth:login:${code}`, 300, accessToken);
+  return code;
+}
+
+export async function consumeLoginCode(code: string): Promise<string | null> {
+  const redis = getRedis();
+  const key = `oauth:login:${code}`;
+  const token = await redis.get(key);
+  if (!token) return null;
+  await redis.del(key);
+  return token;
+}
+
 export async function consumeOAuthState(state: string): Promise<boolean> {
   const redis = getRedis();
   const exists = await redis.del(`oauth:state:${state}`);
@@ -70,6 +91,7 @@ async function fetchGoogleProfile(accessToken: string) {
   return (await res.json()) as {
     id: string;
     email: string;
+    verified_email?: boolean;
     name: string;
     picture?: string;
   };
@@ -84,9 +106,15 @@ export async function googleCallback(
   }
   const tokens = await exchangeCode(code);
   const profile = await fetchGoogleProfile(tokens.access_token);
+  const emailVerified = profile.verified_email === true;
 
   let user = await prisma.user.findUnique({ where: { googleId: profile.id } });
   if (!user) {
+    // Линковка по email — только если Google подтвердил владение адресом.
+    // Иначе будущая ручка смены email превратила бы это в угон аккаунта.
+    if (!emailVerified) {
+      throw new AppError(errorCodes.FORBIDDEN, 'Email Google-аккаунта не подтверждён', 403);
+    }
     user = await prisma.user.findUnique({ where: { email: profile.email } });
     if (user) {
       user = await prisma.user.update({

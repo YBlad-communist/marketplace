@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { get, setAccessToken } from '@/lib/api';
+import { get, post, setAccessToken } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import type { CurrentUser } from '@/lib/auth-store';
 
@@ -13,13 +13,18 @@ function OAuthSuccessInner() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const token = params.get('token');
-    if (!token) {
-      setError('Нет токена. Попробуйте войти снова.');
+    // Бэкенд отдаёт в URL только одноразовый code: меняем его на access-токен
+    // через POST, чтобы токен не оседал в истории браузера и логах.
+    const code = params.get('code');
+    if (!code) {
+      setError('Нет кода входа. Попробуйте войти снова.');
       return;
     }
-    setAccessToken(token);
-    get<{ data: { user: CurrentUser } }>('/api/users/me')
+    post<{ data: { accessToken: string } }>('/api/auth/oauth/exchange', { code })
+      .then((r) => {
+        setAccessToken(r.data.accessToken);
+        return get<{ data: { user: CurrentUser } }>('/api/users/me');
+      })
       .then((r) => {
         setUser(r.data.user);
         router.replace('/');

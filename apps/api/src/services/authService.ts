@@ -5,6 +5,7 @@ import { getRedis } from '../lib/redis.js';
 import { logSecurityEvent } from '../lib/logger.js';
 import {
   createRefreshToken,
+  revokeAllUserSessions,
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
@@ -187,6 +188,9 @@ export async function resetPassword(input: { phone: string; code: string; newPas
     where: { id: userId },
     data: { passwordHash, loginFailCount: 0, lockUntil: null },
   });
+  // Сброс через «забыли пароль» — неаутентифицированный флоу: выкидываем
+  // вообще все сессии, включая возможную сессию злоумышленника.
+  await revokeAllUserSessions(userId);
   const redis = getRedis();
   await redis.del(`verify:fail:PASSWORD_RESET:${input.phone}`);
 }
@@ -209,6 +213,9 @@ export async function changePassword(
     where: { id: userId },
     data: { passwordHash: await hashArgon2(input.newPassword) },
   });
+  // Отзываем все refresh-сессии: смена пароля часто означает компрометацию.
+  // Текущий access-токен доживёт свой TTL (<=15 мин), затем потребуется новый вход.
+  await revokeAllUserSessions(userId);
   logSecurityEvent('password_changed', { userId });
 }
 

@@ -169,6 +169,23 @@ export async function revokeRefreshToken(token: string): Promise<void> {
   }
 }
 
+/**
+ * Отзыв ВСЕХ сессий пользователя (смена/сброс пароля, компрометация).
+ * Чужие access-токены при этом живут до своего TTL (<=15 мин) — приемлемо,
+ * refresh без живой семьи уже не прокрутится.
+ */
+export async function revokeAllUserSessions(userId: string): Promise<void> {
+  const families = await prisma.refreshTokenFamily.findMany({
+    where: { userId, revokedAt: null },
+    select: { familyId: true },
+  });
+  await prisma.refreshTokenFamily.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  await Promise.all(families.map((f) => revokeFamily(f.familyId)));
+}
+
 export async function cleanupExpiredTokens(): Promise<void> {
   // Реализация — в @marketplace/db, здесь оставлена обёртка для совместимости.
   await runSharedCleanup();

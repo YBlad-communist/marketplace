@@ -41,6 +41,10 @@ export const refreshTokenSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
+export const oauthExchangeSchema = z.object({
+  code: z.string().min(32).max(128),
+});
+
 export const changePasswordSchema = z
   .object({
     currentPassword: z.string().min(1).max(72),
