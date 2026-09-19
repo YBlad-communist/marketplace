@@ -75,7 +75,7 @@ export function createApp(): Express {
   app.use(cookieParser());
 
   app.post(
-    '/api/webhooks/stripe',
+    '/api/webhooks/yookassa',
     express.raw({ type: 'application/json', limit: '1mb', verify: captureRawBody }),
     webhookRoutes
   );

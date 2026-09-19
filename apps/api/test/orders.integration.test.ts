@@ -1,26 +1,15 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
 import { isInfraAvailable } from './helpers.js';
+import { installYookassaFake } from './yookassa-fake.js';
+import { handleYookassaNotification } from '../src/services/paymentService.js';
 
-// Мокаем сам Stripe-SDK, а не createEscrowOrder: сервис остаётся настоящим,
+// Мокаем сеть ЮKassa, а не createEscrowOrder: сервис остаётся настоящим,
 // чтобы проверки (идемпотентность, «второй заказ на то же объявление») были честными.
-vi.mock('stripe', () => {
-  class FakeStripe {
-    paymentIntents = {
-      create: vi.fn(async () => ({ id: 'pi_3_mock', client_secret: 'pi_3_secret_test' })),
-      retrieve: vi.fn(async () => ({ id: 'pi_3_mock', client_secret: 'pi_3_secret_test' })),
-      capture: vi.fn(async () => ({ status: 'succeeded' })),
-      cancel: vi.fn(async () => ({})),
-    };
-    transfers = {
-      create: vi.fn(async () => ({ id: 'tr_1_mock' })),
-    };
-  }
-  return { __esModule: true, default: FakeStripe };
-});
+const fake = installYookassaFake({ createStatus: 'pending' });
 
 const app = createApp();
 
@@ -31,6 +20,7 @@ const password = 'Strong123!';
 let buyerToken = '';
 let categoryId = '';
 let listingId = '';
+let webhookListingId = '';
 
 beforeAll(async () => {
   await connectRedis();
@@ -42,7 +32,7 @@ beforeAll(async () => {
   const seller = await prisma.user.findUniqueOrThrow({ where: { phone: sellerPhone } });
   await prisma.user.update({
     where: { id: seller.id },
-    data: { stripeAccountId: 'acct_test', stripeOnboarded: true },
+    data: { yookassaShopId: 'shop_seller_test', yookassaOnboarded: true },
   });
   const sellerLogin = await request(app).post('/api/auth/login').send({ phone: sellerPhone, password });
   const sellerToken = sellerLogin.body.data.accessToken as string;
@@ -52,25 +42,56 @@ beforeAll(async () => {
   const buyer = await request(app).post('/api/auth/login').send({ phone: buyerPhone, password });
   buyerToken = buyer.body.data.accessToken;
 
-  const create = await request(app)
-    .post('/api/listings')
-    .set('Authorization', `Bearer ${sellerToken}`)
-    .send({ title: 'Товар для оплаты', description: 'Описание товара для проверки оплаты', price: 100, categoryId, city: 'Москва' });
-  listingId = create.body.data.listing.id;
+  const makeListing = async (title: string) => {
+    const res = await request(app)
+      .post('/api/listings')
+      .set('Authorization', `Bearer ${sellerToken}`)
+      .send({ title, description: 'Описание товара для проверки оплаты', price: 100, categoryId, city: 'Москва' });
+    return res.body.data.listing.id as string;
+  };
+  listingId = await makeListing('Товар для оплаты');
+  webhookListingId = await makeListing('Товар для вебхука');
 });
 
-describeInfra('orders (integration, mocked stripe)', () => {
-  it('creates an escrow order with payment intent', async () => {
+describeInfra('orders (integration, mocked yookassa)', () => {
+  it('создаёт эскроу-заказ и отдаёт токен виджета ЮKassa', async () => {
     const res = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${buyerToken}`)
       .send({ listingId, idempotencyKey: `ord-${Date.now()}` });
     expect(res.status).toBe(201);
-    expect(res.body.data.clientSecret).toBe('pi_3_secret_test');
+    expect(res.body.data.confirmationToken).toMatch(/^tok_/);
     expect(res.body.data.order.status).toBe('PENDING');
+    expect(fake.calls.create).toBe(1);
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: res.body.data.order.id } });
+    expect(order.yookassaPaymentId).toBe(fake.lastPaymentId());
   });
 
-  it('rejects a second order for the same listing', async () => {
+  it('вебхук payment.waiting_for_capture переводит PENDING -> PAID', async () => {
+    const created = await request(app)
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ listingId: webhookListingId, idempotencyKey: `ord-webhook-${Date.now()}` });
+    expect(created.status).toBe(201);
+    const paymentId = fake.lastPaymentId();
+    fake.setPaymentStatus(paymentId, 'waiting_for_capture');
+
+    const res = await handleYookassaNotification(
+      Buffer.from(
+        JSON.stringify({
+          type: 'notification',
+          event: 'payment.waiting_for_capture',
+          object: { id: paymentId, status: 'waiting_for_capture' },
+        })
+      )
+    );
+    expect(res.received).toBe(true);
+    const order = await prisma.order.findFirstOrThrow({ where: { yookassaPaymentId: paymentId } });
+    expect(order.status).toBe('PAID');
+  });
+
+  it('отклоняет второй заказ на то же объявление', async () => {
     await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${buyerToken}`)

@@ -16,21 +16,16 @@ export type ListingStatus = (typeof LISTING_STATUSES)[number];
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 /**
- * Идемпотентные ключи Stripe для выплаты (releaseOrder и recovery-джоба worker'а
- * обязаны использовать один и тот же формат: повторный прогон с тем же ключом
- * Stripe возвращает исходный результат, не создавая дубликата перевода).
+ * Идемпотентные ключи ЮKassa для платежа/возврата. Формат ключей общий для
+ * paymentService (apps/api) и recovery-джоб worker'а: повторный прогон с тем же
+ * Idempotence-Key не создаёт дубликата операции даже если пакет дошёл до API
+ * повторно. ЮKassa ограничивает длину ключа 64 символами — наши префиксы с
+ * cuid-заказом укладываются в лимит.
  */
 export const releaseCaptureIdempotencyKey = (orderId: string) => `release-capture-${orderId}`;
-export const releaseTransferIdempotencyKey = (orderId: string) => `release-${orderId}`;
-
-/**
- * Идемпотентные ключи Stripe для возврата (refundOrder): `refund-cancel-{id}`
- * для paymentIntents.cancel и `refund-{id}` для refunds.create. Повторный
- * вызов с тем же ключом Stripe дедуплицирует операцию — параллельный/двойной
- * возврат не создаст второго списания.
- */
 export const refundCancelIdempotencyKey = (orderId: string) => `refund-cancel-${orderId}`;
 export const refundIdempotencyKey = (orderId: string) => `refund-${orderId}`;
+export const expiredHoldCancelIdempotencyKey = (orderId: string) => `expired-cancel-${orderId}`;
 
 export const MIN_PASSWORD_LENGTH = 8;
 export const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;

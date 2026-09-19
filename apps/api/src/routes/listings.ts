@@ -12,7 +12,7 @@ import {
 import { validate } from '../middleware/validate.js';
 import { authenticate, optionalAuthenticate } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
-import { requireTurnstile } from '../middleware/turnstile.js';
+import { requireCaptcha } from '../middleware/captcha.js';
 import { createPresignedUpload, deleteObject, verifyImageObject } from '../lib/s3.js';
 import { processImage } from '../services/imageService.js';
 import { enqueueS3Delete } from '../services/notificationService.js';
@@ -120,7 +120,7 @@ router.get('/:id', optionalAuthenticate, async (req, res, next) => {
 router.post(
   '/',
   authenticate,
-  requireTurnstile,
+  requireCaptcha,
   rateLimit({ key: 'listing:create', windowMs: 10 * 60_000, max: 10, log: true }),
   validate(listingCreateSchema),
   async (req, res, next) => {

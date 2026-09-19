@@ -1,41 +1,37 @@
-import Stripe from 'stripe';
 import { prisma } from '@marketplace/db';
-import { releaseCaptureIdempotencyKey, releaseTransferIdempotencyKey } from '@marketplace/shared';
+import { releaseCaptureIdempotencyKey } from '@marketplace/shared';
 import { env } from './config.js';
 import { logger, sendEmail } from './mailer.js';
+import {
+  captureYookassaPayment,
+  configureYookassa,
+  getYookassaPayment,
+  yookassaConfigured,
+} from './lib/yookassa.js';
 
-let stripe: Stripe | null = null;
-
-function getStripe(): Stripe | null {
-  if (!env.STRIPE_SECRET_KEY) return null;
-  if (!stripe) {
-    stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
-  }
-  return stripe;
-}
+configureYookassa(env.YOOKASSA_SHOP_ID, env.YOOKASSA_SECRET_KEY);
 
 /**
- * Решение по статусу PaymentIntent для застрявшего в RELEASING заказа.
- * - 'finish' — деньги доступны (succeeded или requires_capture): доводим выплату;
- * - 'refund'  — платёж мёртв (canceled/requires_payment_method/failed/processing):
- *               переводим заказ в REFUNDED и снимаем резерв с объявления;
- * - 'skip'    — непонятное состояние, не трогаем, только лог.
+ * Решение по статусу платежа ЮKassa для застрявшего в RELEASING заказа.
+ * - 'finish' — деньги доступны (succeeded или waiting_for_capture): доводим
+ *              выплату повторным capture (идемпотентно, тот же ключ, что и API);
+ * - 'refund' — платёж мёртв (canceled): переводим заказ в REFUNDED и снимаем
+ *              резерв с объявления (деньги уже вернулись покупателю или не были списаны);
+ * - 'skip'   — непонятное состояние, не трогаем, только лог.
  */
-export function decideReleasingOutcome(piStatus: string): 'finish' | 'refund' | 'skip' {
-  if (piStatus === 'succeeded' || piStatus === 'requires_capture') return 'finish';
-  if (piStatus === 'canceled' || piStatus === 'requires_payment_method' || piStatus === 'failed') {
-    return 'refund';
-  }
+export function decideReleasingOutcome(status: string): 'finish' | 'refund' | 'skip' {
+  if (status === 'succeeded' || status === 'waiting_for_capture') return 'finish';
+  if (status === 'canceled') return 'refund';
   return 'skip';
 }
 
 /**
  * Recovery-джоба: заказы, застрявшие в RELEASING (процесс упал между capture
- * и финальной транзакцией). Сверяемся со Stripe и доводим заказ до конца.
+ * и финальной транзакцией). Сверяемся с ЮKassa и доводим заказ до конца.
  *
  * Идемпотентность строится на том же, что и releaseOrder:
- * - capture/transfer идут с теми же idempotency-ключами (release-capture-{id},
- *   release-{id}) — повторный прогон не создаст второго перевода;
+ * - capture идёт с тем же ключом (release-capture-{id}) — повторный прогон не
+ *   создаст второго списания;
  * - финальный переход RELEASING -> RELEASED гейтится по статусу, поэтому
  *   повторный запуск джобы (ретрай BullMQ) не «захватывает» уже доведённые
  *   заказы заново.
@@ -45,9 +41,8 @@ export async function recoverStuckReleasingOrders(): Promise<{
   finished: number;
   refunded: number;
 }> {
-  const s = getStripe();
-  if (!s) {
-    logger.warn('STRIPE_SECRET_KEY is not configured, skipping releasing recovery');
+  if (!yookassaConfigured()) {
+    logger.warn('YOOKASSA_SECRET_KEY is not configured, skipping releasing recovery');
     return { checked: 0, finished: 0, refunded: 0 };
   }
 
@@ -61,58 +56,63 @@ export async function recoverStuckReleasingOrders(): Promise<{
       listingId: true,
       amount: true,
       currency: true,
-      stripePaymentIntentId: true,
+      yookassaPaymentId: true,
       idempotencyKey: true,
       buyer: { select: { email: true } },
-      listing: { select: { seller: { select: { email: true, stripeAccountId: true } } } },
+      listing: { select: { seller: { select: { email: true } } } },
     },
   });
 
   let finished = 0;
   let refunded = 0;
   for (const order of stale) {
-    if (!order.stripePaymentIntentId || !order.listing?.seller.stripeAccountId) continue;
+    if (!order.yookassaPaymentId) continue;
 
-    let piStatus: string;
+    let status: string;
     try {
-      const pi = await s.paymentIntents.retrieve(order.stripePaymentIntentId);
-      piStatus = pi.status;
+      const payment = await getYookassaPayment(order.yookassaPaymentId);
+      status = payment.status;
     } catch (err) {
-      logger.warn({ err, orderId: order.id }, 'releasing recovery: payment intent lookup failed, skipping');
+      logger.warn({ err, orderId: order.id }, 'releasing recovery: payment lookup failed, skipping');
       continue;
     }
 
-    const outcome = decideReleasingOutcome(piStatus);
+    const outcome = decideReleasingOutcome(status);
     if (outcome === 'skip') {
-      logger.warn({ orderId: order.id, piStatus }, 'releasing recovery: unexpected payment intent status');
+      logger.warn({ orderId: order.id, status }, 'releasing recovery: unexpected payment status');
       continue;
     }
 
     if (outcome === 'finish') {
       try {
-        await finishReleasingOrder(order, s);
+        await finishReleasingOrder(order);
         finished += 1;
       } catch (err) {
-        logger.warn({ err, orderId: order.id, piStatus }, 'releasing recovery: release failed, will retry');
+        logger.warn({ err, orderId: order.id, status }, 'releasing recovery: release failed, will retry');
       }
     } else {
-      await prisma.order.update({
-        where: { id: order.id },
+      // Платёж отменён: средства уже вернулись покупателю (или не списаны).
+      const claimed = await prisma.order.updateMany({
+        where: { id: order.id, status: 'RELEASING' },
         data: { status: 'REFUNDED' },
       });
+      if (claimed.count === 0) {
+        logger.info({ orderId: order.id }, 'releasing recovery: order left RELEASING before update, skipping');
+        continue;
+      }
       await prisma.listing.updateMany({
         where: { id: order.listingId, status: 'RESERVED' },
         data: { status: 'ACTIVE' },
       });
       refunded += 1;
-      logger.warn({ orderId: order.id, piStatus }, 'releasing recovery: payment dead, order refunded');
-      if (order.buyer.email) {
+      logger.warn({ orderId: order.id, status }, 'releasing recovery: payment dead, order refunded');
+      if (order.buyer?.email) {
         await sendEmail({
           to: order.buyer.email,
           subject: 'Платёж по заказу не прошёл, средства не списаны',
           template: 'order-updated',
           templateData: { orderId: order.id },
-          text: 'Выплата по вашему заказу не удалась: платёж был отклонён. Резерв с объявления снят.',
+          text: 'Выплата по вашему заказу не удалась: платёж был отменён. Резерв с объявления снят.',
         }).catch((err) => logger.warn({ err, orderId: order.id }, 'releasing recovery email failed'));
       }
     }
@@ -122,54 +122,39 @@ export async function recoverStuckReleasingOrders(): Promise<{
 }
 
 /**
- * Доводим выплату RELEASING-заказа. Тот же набор шагов, что и в
- * performRelease (apps/api): capture + transfer + транзакция RELEASING->RELEASED.
+ * Доводим выплату RELEASING-заказа. Тот же шаг, что и в
+ * performRelease (apps/api): capture сплит-платежа + транзакция RELEASING->RELEASED.
+ * Распределение по transfers было задано при создании платежа, поэтому тело
+ * capture пустое; повторный capture с тем же ключом идемпотентен.
  */
-async function finishReleasingOrder(
-  order: {
-    id: string;
-    listingId: string;
-    amount: unknown;
-    currency: string;
-    stripePaymentIntentId: string | null;
-    idempotencyKey: string | null;
-  },
-  s: Stripe
-): Promise<void> {
-  if (!order.stripePaymentIntentId) throw new Error('no payment intent');
+async function finishReleasingOrder(order: {
+  id: string;
+  listingId: string;
+  amount: unknown;
+  currency: string;
+  yookassaPaymentId: string | null;
+  idempotencyKey: string | null;
+  buyer?: { email: string | null } | null;
+  listing?: { seller?: { email: string | null } | null } | null;
+}): Promise<void> {
+  if (!order.yookassaPaymentId) throw new Error('no yookassa payment');
 
-  const pi = await s.paymentIntents.capture(order.stripePaymentIntentId, {
-    idempotencyKey: releaseCaptureIdempotencyKey(order.id),
-  });
-  if (pi.status !== 'succeeded') {
-    throw new Error(`capture not succeeded: ${pi.status}`);
+  const payment = await captureYookassaPayment(
+    order.yookassaPaymentId,
+    releaseCaptureIdempotencyKey(order.id)
+  );
+  if (payment.status !== 'succeeded') {
+    throw new Error(`capture not succeeded: ${payment.status}`);
   }
 
-  const fee = Math.round((Number(order.amount) * env.STRIPE_PLATFORM_FEE_BASIS_POINTS) / 10000 * 100);
-  const full = await prisma.order.findUnique({
-    where: { id: order.id },
-    select: { listing: { select: { seller: { select: { email: true, stripeAccountId: true } } } } },
-  });
-  const destination = full?.listing?.seller?.stripeAccountId;
-  if (!destination) throw new Error('seller stripe account missing');
-
-  const transfer = await s.transfers.create(
-    {
-      amount: Math.round(Number(order.amount) * 100) - fee,
-      currency: order.currency.toLowerCase(),
-      destination,
-      transfer_group: `order-${order.idempotencyKey?.slice(0, 24)}`,
-    },
-    { idempotencyKey: releaseTransferIdempotencyKey(order.id) }
-  );
+  const fee = Number(((Number(order.amount) * env.YOOKASSA_PLATFORM_FEE_BASIS_POINTS) / 10000).toFixed(2));
 
   const updated = await prisma.$transaction(async (tx) => {
     const res = await tx.order.updateMany({
       where: { id: order.id, status: 'RELEASING' },
       data: {
         status: 'RELEASED',
-        stripeTransferId: transfer.id,
-        platformFee: fee / 100,
+        platformFee: fee,
         releasedAt: new Date(),
       },
     });
@@ -182,15 +167,15 @@ async function finishReleasingOrder(
   });
 
   if (updated) {
-    logger.info({ orderId: order.id, transferId: transfer.id }, 'stuck releasing order finished by recovery');
-    const sellerEmail = full?.listing?.seller?.email;
+    logger.info({ orderId: order.id, paymentId: order.yookassaPaymentId }, 'stuck releasing order finished by recovery');
+    const sellerEmail = order.listing?.seller?.email;
     if (sellerEmail) {
       await sendEmail({
         to: sellerEmail,
         subject: 'Заказ подтверждён и выплата отправлена',
         template: 'order-updated',
         templateData: { orderId: order.id, amount: String(order.amount) },
-        text: 'Покупатель подтвердил получение. Средства переведены на ваш счёт Stripe.',
+        text: 'Покупатель подтвердил получение. Средства переведены на ваш счёт ЮKassa.',
       }).catch((err) => logger.warn({ err, orderId: order.id }, 'releasing recovery email failed'));
     }
   }

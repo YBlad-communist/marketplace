@@ -6,12 +6,8 @@ export const createOrderSchema = z.object({
   idempotencyKey: z.string().min(8).max(128).regex(/^[a-zA-Z0-9._-]+$/),
 });
 
-export const stripeConnectOnboardingSchema = z.object({
-  refreshPath: z.string().max(500).optional(),
-});
-
-export const stripeConnectReturnSchema = z.object({
-  account: z.string().optional(),
+export const sellerYookassaConnectSchema = z.object({
+  shopId: z.string().trim().min(1, 'Укажите Shop ID магазина ЮKassa').max(64),
 });
 
 export const reviewCreateSchema = z.object({

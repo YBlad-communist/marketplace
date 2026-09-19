@@ -1,16 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prisma } from '@marketplace/db';
 
-const retrieveMock = vi.hoisted(() =>
-  vi.fn(async (id: string) => ({ id, status: 'canceled' }))
-);
+// Мок сети ЮKassa: GET /payments/{id} отдаёт статус. Мок на уровне fetch,
+// поэтому логика джобы (клейм, разбор статусов) остаётся настоящей.
+type PaymentStatusFn = (paymentId: string) => string | Promise<string>;
+let statusFor: PaymentStatusFn = () => 'canceled';
+let captureStatuses = new Map<string, string>();
 
-vi.mock('stripe', () => ({
-  __esModule: true,
-  default: class {
-    paymentIntents = { retrieve: retrieveMock };
-  },
-}));
+const fetchMock = vi.fn(async (input: string | URL | Request) => {
+  const url = typeof input === 'string' ? input : input.toString();
+  const match = url.match(/\/payments\/([^/?]+)/);
+  const id = match ? match[1] : '';
+  const status = captureStatuses.get(id) ?? (await statusFor(id));
+  return new Response(JSON.stringify({ id, status }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+});
+vi.stubGlobal('fetch', fetchMock);
 
 import { checkExpiredHoldsJob } from '../src/expiredHolds.js';
 
@@ -34,7 +41,7 @@ const phone = (n: number) => `+7${unique.toString().slice(-9)}${n}`;
 
 let raceOrderId = '';
 
-async function createStalePaidOrder(tag: string, piId: string): Promise<{ orderId: string; listingId: string }> {
+async function createStalePaidOrder(tag: string, paymentId: string): Promise<{ orderId: string; listingId: string }> {
   const cat = await prisma.category.findFirst({ where: { slug: 'electronics' } });
   const seller = await prisma.user.upsert({
     where: { phone: phone(8) },
@@ -52,7 +59,7 @@ async function createStalePaidOrder(tag: string, piId: string): Promise<{ orderI
       title: `Холд-объявление ${tag}`,
       description: 'Описание объявления для теста проверки холдов',
       price: 100,
-      currency: 'EUR',
+      currency: 'RUB',
       status: 'RESERVED',
       sellerId: seller.id,
       categoryId: cat?.id ?? '',
@@ -65,9 +72,9 @@ async function createStalePaidOrder(tag: string, piId: string): Promise<{ orderI
       listingId: listing.id,
       buyerId: buyer.id,
       amount: 100,
-      currency: 'EUR',
+      currency: 'RUB',
       status: 'PAID',
-      stripePaymentIntentId: piId,
+      yookassaPaymentId: paymentId,
       createdAt: new Date(Date.now() - 8 * 86400_000),
     },
   });
@@ -77,9 +84,7 @@ async function createStalePaidOrder(tag: string, piId: string): Promise<{ orderI
 beforeAll(async () => {
   await prisma.$connect();
   const cat = await prisma.category.findFirst({ where: { slug: 'electronics' } });
-  if (cat) {
-    // категория уже есть — ок
-  } else {
+  if (!cat) {
     await prisma.category.upsert({
       where: { slug: 'services' },
       update: {},
@@ -91,16 +96,19 @@ beforeAll(async () => {
       create: { name: 'Электроника', slug: 'electronics' },
     });
   }
+  // Чистим холд-заказы прошлых прогонов: джоба берёт все просроченные PAID
+  // заказы, поэтому оставленный «живой холд» искажал бы счётчик refunded.
+  await prisma.order.deleteMany({ where: { listing: { title: { startsWith: 'Холд-объявление' } } } });
+  await prisma.listing.deleteMany({ where: { title: { startsWith: 'Холд-объявление' } } });
 });
 
 afterAll(async () => {
-  retrieveMock.mockRestore?.();
   await prisma.$disconnect();
 });
 
 describeInfra('expired holds job: атомарный клейм не перетирает начатую выплату', () => {
   it('истёкший PAID-холд возвращается (REFUNDED + объявление ACTIVE)', async () => {
-    const { orderId, listingId } = await createStalePaidOrder('claim', `pi_hold_${unique}_claim`);
+    const { orderId, listingId } = await createStalePaidOrder('claim', `yoo_hold_${unique}_claim`);
 
     const result = await checkExpiredHoldsJob();
 
@@ -111,24 +119,39 @@ describeInfra('expired holds job: атомарный клейм не перет�
     expect(listing.status).toBe('ACTIVE');
   });
 
-  it('гонка с releaseOrder: джоба НЕ перезаписывает заказ, ушедший в RELEASING между чтением и записью', async () => {
-    const { orderId, listingId } = await createStalePaidOrder('race', `pi_hold_${unique}_race`);
-    raceOrderId = orderId;
-
-    // Имитация гонки: джоба уже прочитала PAID-заказ и спрашивает Stripe,
-    // а покупатель в этот момент успел запустить releaseOrder (PAID -> RELEASING).
-    retrieveMock.mockImplementation(async (id: string) => {
-      if (id === `pi_hold_${unique}_race`) {
-        await prisma.order.update({
-          where: { id: raceOrderId },
-          data: { status: 'RELEASING' },
-        });
-      }
-      return { id, status: 'canceled' };
-    });
+  it('живой холд (waiting_for_capture) не закрывается', async () => {
+    const paymentId = `yoo_hold_${unique}_alive`;
+    const { orderId } = await createStalePaidOrder('alive', paymentId);
+    captureStatuses = new Map([[paymentId, 'waiting_for_capture']]);
 
     const result = await checkExpiredHoldsJob();
-    retrieveMock.mockImplementation(async (id: string) => ({ id, status: 'canceled' }));
+    captureStatuses = new Map();
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe('PAID');
+    expect(result.refunded).toBe(0);
+
+    // «Омолаживаем» холд, чтобы он не попал в следующий прогон джобы
+    // и не искажал счётчик refunded в тесте гонки.
+    await prisma.order.update({ where: { id: orderId }, data: { createdAt: new Date() } });
+  });
+
+  it('гонка с releaseOrder: джоба НЕ перезаписывает заказ, ушедший в RELEASING между чтением и записью', async () => {
+    const paymentId = `yoo_hold_${unique}_race`;
+    const { orderId, listingId } = await createStalePaidOrder('race', paymentId);
+    raceOrderId = orderId;
+
+    // Имитация гонки: джоба уже прочитала PAID-заказ и спрашивает ЮKassa,
+    // а покупатель в этот момент успел запустить releaseOrder (PAID -> RELEASING).
+    statusFor = async (id: string) => {
+      if (id === paymentId) {
+        await prisma.order.update({ where: { id: raceOrderId }, data: { status: 'RELEASING' } });
+      }
+      return 'canceled';
+    };
+
+    const result = await checkExpiredHoldsJob();
+    statusFor = () => 'canceled';
 
     const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(order.status).toBe('RELEASING');

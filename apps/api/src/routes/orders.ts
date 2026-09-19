@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { prisma } from '@marketplace/db';
-import { createOrderSchema, AppError, errorCodes } from '@marketplace/shared';
+import { createOrderSchema, sellerYookassaConnectSchema, AppError, errorCodes } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import {
   createEscrowOrder,
-  ensureSellerStripeAccount,
+  ensureSellerYookassa,
   releaseOrder,
   refundOrder,
 } from '../services/paymentService.js';
@@ -14,7 +14,7 @@ const router: Router = Router();
 
 router.post('/', authenticate, validate(createOrderSchema), async (req, res, next) => {
   try {
-    const { clientSecret, order } = await createEscrowOrder({
+    const { confirmationToken, order } = await createEscrowOrder({
       listingId: req.body.listingId,
       buyerId: req.userId!,
       idempotencyKey: req.body.idempotencyKey,
@@ -27,7 +27,7 @@ router.post('/', authenticate, validate(createOrderSchema), async (req, res, nex
           amount: Number(order.amount),
           currency: order.currency,
         },
-        clientSecret,
+        confirmationToken,
       },
     });
   } catch (err) {
@@ -110,9 +110,9 @@ router.post('/:id/refund', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/seller/connect', authenticate, async (req, res, next) => {
+router.post('/seller/connect', authenticate, validate(sellerYookassaConnectSchema), async (req, res, next) => {
   try {
-    const result = await ensureSellerStripeAccount(req.userId!);
+    const result = await ensureSellerYookassa(req.userId!, req.body.shopId);
     res.json({ data: result });
   } catch (err) {
     next(err);
@@ -123,7 +123,7 @@ router.get('/seller/status', authenticate, async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
-      select: { stripeAccountId: true, stripeOnboarded: true },
+      select: { yookassaShopId: true, yookassaOnboarded: true },
     });
     res.json({ data: user });
   } catch (err) {

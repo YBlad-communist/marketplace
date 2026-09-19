@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Header } from '@/components/Header';
-import { post, setAccessToken, ApiError, API_URL } from '@/lib/api';
+import { post, setAccessToken, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 
 export default function LoginPage() {
@@ -87,9 +87,9 @@ export default function LoginPage() {
             </Link>
           </div>
           <div className="border-t pt-4">
-            <a className="btn-secondary w-full" href={`${API_URL}/api/auth/oauth/google`}>
+            <button type="button" className="btn-secondary w-full opacity-60" disabled title="Вход через Google временно недоступен">
               Войти через Google
-            </a>
+            </button>
           </div>
         </form>
       </main>

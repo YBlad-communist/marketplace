@@ -9,18 +9,16 @@ import { useAuthStore } from '@/lib/auth-store';
 
 export default function SellerConnectPage() {
   const user = useAuthStore((s) => s.user);
+  const [shopId, setShopId] = useState(user?.yookassaShopId ?? '');
   const [error, setError] = useState<string | null>(null);
 
   const connect = useMutation({
-    mutationFn: () =>
-      post<{ data: { accountId: string; url: string | null } }>('/api/orders/seller/connect'),
-    onSuccess: (res) => {
-      if (res.data.url) {
-        window.location.href = res.data.url;
-      }
+    mutationFn: (id: string) => post<{ data: { shopId: string } }>('/api/orders/seller/connect', { shopId: id }),
+    onSuccess: () => {
+      setError(null);
     },
     onError: (err) => {
-      setError(err instanceof ApiError ? err.message : 'Не удалось подключить выплаты');
+      setError(err instanceof ApiError ? err.message : 'Не удалось сохранить Shop ID');
     },
   });
 
@@ -32,25 +30,38 @@ export default function SellerConnectPage() {
 
         <div className="card space-y-5 p-6">
           <p className="text-gray-700">
-            Для получения оплаты по проданным объявлениям необходимо подключить аккаунт Stripe. Деньги
-            покупателя хранятся на escrow-счёте и переводятся вам после подтверждения передачи.
+            Для получения оплаты по проданным объявлениям укажите Shop ID вашего магазина ЮKassa
+            (создайте магазин в личном кабинете ЮKassa и включите для него приём платежей). Деньги
+            покупателя удерживаются платформой и переводятся вам после подтверждения получения.
           </p>
 
-          {user?.stripeOnboarded ? (
+          {user?.yookassaOnboarded ? (
             <div className="rounded-lg bg-green-100 p-4 text-sm text-green-700">
-              Выплаты уже подключены.
+              Выплаты подключены{user.yookassaShopId ? ` (Shop ID: ${user.yookassaShopId})` : ''}.
             </div>
           ) : (
-            <>
-              <button
-                className="btn-primary w-full"
-                disabled={connect.isPending}
-                onClick={() => connect.mutate()}
-              >
-                {connect.isPending ? 'Перенаправляем в Stripe…' : 'Подключить Stripe'}
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (shopId.trim()) connect.mutate(shopId.trim());
+              }}
+            >
+              <label className="block">
+                <span className="mb-1 block text-sm text-gray-600">Shop ID магазина ЮKassa</span>
+                <input
+                  className="input"
+                  value={shopId}
+                  onChange={(e) => setShopId(e.target.value)}
+                  placeholder="123456"
+                  required
+                />
+              </label>
+              <button className="btn-primary w-full" disabled={connect.isPending || !shopId.trim()}>
+                {connect.isPending ? 'Сохраняем…' : 'Подключить ЮKassa'}
               </button>
               {error && <p className="text-sm text-red-600">{error}</p>}
-            </>
+            </form>
           )}
 
           <div className="text-sm text-gray-500">

@@ -15,7 +15,7 @@ export function navIndex(pathname: string): number | null {
   if (pathname.startsWith('/cabinet')) return 5;
   if (pathname.startsWith('/seller/connect')) return 5;
   if (pathname.startsWith('/admin')) return 6;
-  if (pathname.startsWith('/login') || pathname.startsWith('/oauth')) return 7;
+  if (pathname.startsWith('/login')) return 7;
   if (pathname.startsWith('/register')) return 8;
   if (pathname.startsWith('/users')) return 0;
   return null;

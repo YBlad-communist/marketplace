@@ -1,33 +1,36 @@
-import Stripe from 'stripe';
 import { Order, prisma } from '@marketplace/db';
-import { AppError, errorCodes, releaseCaptureIdempotencyKey, releaseTransferIdempotencyKey, refundCancelIdempotencyKey, refundIdempotencyKey } from '@marketplace/shared';
+import { AppError, errorCodes } from '@marketplace/shared';
 import { env } from '../config.js';
 import { getRedis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
 import { enqueueEmail } from './notificationService.js';
+import {
+  cancelKeyFor,
+  cancelYookassaPayment,
+  captureKeyFor,
+  captureYookassaPayment,
+  createYookassaPayment,
+  getYookassaPayment,
+  isTrustedYookassaIp,
+  refundCancelKeyFor,
+  refundKeyFor,
+  refundYookassaPayment,
+  toAmount,
+  type YooPayment,
+} from '../lib/yookassa.js';
 
 /**
- * ЭСКРОУ-ПАТТЕРН: PaymentIntent с manual capture.
- * 1. Покупатель платит -> деньги авторизованы и УДЕРЖАНЫ платформой (не списаны).
- * 2. Покупатель подтверждает получение -> сервер делает capture + transfer продавцу.
- * 3. Возврат/спор -> refund до capture.
- * Это самая простая и безопасная модель эскроу без создания произвольных сущностей Stripe.
+ * ЭСКРОУ-ПАТТЕРН на ЮKassa (split payments, двухстадийные платежи).
+ * 1. Покупатель платит через виджет -> деньги авторизованы и УДЕРЖАНЫ (pending -> waiting_for_capture).
+ * 2. Покупатель подтверждает получение -> capture: деньги попадают продавцу по transfers,
+ *    комиссия платформы удерживается через platform_fee_amount.
+ * 3. Возврат -> cancel холда (waiting_for_capture) или refund после capture (succeeded).
+ * Никаких отдельных сущностей «перевода» не требуется: распределение задано в transfers
+ * при создании платежа, capture раскладывает сумму автоматически.
  */
 
-let stripe: Stripe | null = null;
-
-export function getStripe(): Stripe {
-  if (!stripe) {
-    if (!env.STRIPE_SECRET_KEY) {
-      throw new AppError(errorCodes.INTERNAL, 'Stripe не настроен', 500);
-    }
-    stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
-  }
-  return stripe;
-}
-
-export function platformFeeBasisPoints(): number {
-  return env.STRIPE_PLATFORM_FEE_BASIS_POINTS;
+export function platformFeeForAmount(amount: number): number {
+  return Number(((amount * env.YOOKASSA_PLATFORM_FEE_BASIS_POINTS) / 10000).toFixed(2));
 }
 
 /**
@@ -42,7 +45,7 @@ async function unlockListing(listingId: string): Promise<void> {
   });
 }
 
-/** Уведомление администратора о споре (если задан ADMIN_EMAIL). */
+/** Уведомление администратора о спорной ситуации (если задан ADMIN_EMAIL). */
 async function notifyAdmin(subject: string, text: string): Promise<void> {
   if (!env.ADMIN_EMAIL) return;
   await enqueueEmail({
@@ -51,37 +54,35 @@ async function notifyAdmin(subject: string, text: string): Promise<void> {
     template: 'order-updated',
     templateData: {},
     text,
-  }).catch((err) => logger.warn({ err }, 'admin dispute notification failed'));
+  }).catch((err) => logger.warn({ err }, 'admin notification failed'));
 }
 
-export async function ensureSellerStripeAccount(sellerId: string): Promise<{ accountId: string; url: string | null }> {
-  const s = getStripe();
+/**
+ * Подключение продавца к ЮKassa. Онбординг магазина выполняется в личном
+ * кабинете ЮKassa (API не предоставляет публичной кнопки Connect для платформ),
+ * здесь мы только сохраняем Shop ID магазина-продавца для сплитования.
+ */
+export async function ensureSellerYookassa(sellerId: string, shopId: string): Promise<{ shopId: string }> {
   const seller = await prisma.user.findUnique({ where: { id: sellerId } });
   if (!seller) throw new AppError(errorCodes.NOT_FOUND, 'Продавец не найден', 404);
 
-  let accountId = seller.stripeAccountId;
-  if (!accountId) {
-    const account = await s.accounts.create({ type: 'express' });
-    accountId = account.id;
-    await prisma.user.update({ where: { id: sellerId }, data: { stripeAccountId: accountId } });
+  const normalized = shopId.trim();
+  if (!normalized) {
+    throw new AppError(errorCodes.VALIDATION, 'Укажите Shop ID магазина ЮKassa', 400);
   }
 
-  const accountLink = await s.accountLinks.create({
-    account: accountId,
-    refresh_url: env.STRIPE_CONNECT_ONBOARDING_URL,
-    return_url: env.STRIPE_CONNECT_ONBOARDING_URL,
-    type: 'account_onboarding',
+  await prisma.user.update({
+    where: { id: sellerId },
+    data: { yookassaShopId: normalized, yookassaOnboarded: true },
   });
-  return { accountId, url: accountLink.url };
+  return { shopId: normalized };
 }
 
 export async function createEscrowOrder(input: {
   listingId: string;
   buyerId: string;
   idempotencyKey: string;
-}): Promise<{ order: Order; clientSecret: string }> {
-  const s = getStripe();
-
+}): Promise<{ order: Order; confirmationToken: string; paymentId: string }> {
   // Сначала проверяем идемпотентность — повторный запрос с тем же ключом
   // должен вернуть существующий заказ, а не создавать дубликат.
   const existingOrder = await prisma.order.findUnique({
@@ -91,16 +92,20 @@ export async function createEscrowOrder(input: {
     if (existingOrder.listingId !== input.listingId) {
       throw new AppError(errorCodes.CONFLICT, 'Idempotency-ключ уже использован', 409);
     }
-    if (existingOrder.stripePaymentIntentId) {
-      const pi = await s.paymentIntents.retrieve(existingOrder.stripePaymentIntentId);
-      return { order: existingOrder, clientSecret: pi.client_secret ?? '' };
+    if (existingOrder.yookassaPaymentId) {
+      const payment = await getYookassaPayment(existingOrder.yookassaPaymentId);
+      const token = payment.confirmation?.confirmation_token;
+      if (!token) {
+        throw new AppError(errorCodes.CONFLICT, 'Платёж по заказу уже завершён', 409);
+      }
+      return { order: existingOrder, confirmationToken: token, paymentId: existingOrder.yookassaPaymentId };
     }
     throw new AppError(errorCodes.CONFLICT, 'Заказ уже существует', 409);
   }
 
   const listing = await prisma.listing.findUnique({
     where: { id: input.listingId },
-    include: { order: true, seller: { select: { stripeAccountId: true, stripeOnboarded: true, id: true } } },
+    include: { order: true, seller: { select: { yookassaShopId: true, yookassaOnboarded: true, id: true } } },
   });
   if (!listing) throw new AppError(errorCodes.NOT_FOUND, 'Объявление не найдено', 404);
   if (listing.sellerId === input.buyerId) {
@@ -112,7 +117,7 @@ export async function createEscrowOrder(input: {
   if (listing.status !== 'ACTIVE') {
     throw new AppError(errorCodes.CONFLICT, 'Объявление недоступно для покупки', 409);
   }
-  if (!listing.seller.stripeAccountId || !listing.seller.stripeOnboarded) {
+  if (!listing.seller.yookassaShopId || !listing.seller.yookassaOnboarded) {
     throw new AppError(
       errorCodes.PAYMENT_REQUIRED,
       'Продавец ещё не подключил выплаты. Свяжитесь с продавцом.',
@@ -120,21 +125,45 @@ export async function createEscrowOrder(input: {
     );
   }
 
-  const amount = Math.round(Number(listing.price) * 100);
+  const amount = Number(listing.price);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new AppError(errorCodes.VALIDATION, 'Некорректная цена', 400);
   }
+  if (listing.currency !== 'RUB') {
+    // Защитный сетевой слой: БД/схема не позволяют создать не-RUB объявление,
+    // но если данные были внесены в обход validation — не списываем в валюте.
+    throw new AppError(errorCodes.CONFLICT, 'Оплата доступна только в рублях (RUB)', 409);
+  }
 
-  const paymentIntent = await s.paymentIntents.create(
-    {
-      amount,
-      currency: listing.currency.toLowerCase(),
-      capture_method: 'manual',
-      transfer_group: `order-${input.idempotencyKey.slice(0, 24)}`,
-      metadata: { orderKey: input.idempotencyKey, listingId: listing.id, buyerId: input.buyerId },
+  const fee = platformFeeForAmount(amount);
+  const sellerAmount = Number((amount - fee).toFixed(2));
+  if (sellerAmount <= 0) {
+    throw new AppError(errorCodes.VALIDATION, 'Комиссия платформы превышает цену', 400);
+  }
+
+  const payment = await createYookassaPayment({
+    amount,
+    description: `Оплата заказа на платформе (объявление: ${listing.title})`,
+    metadata: {
+      orderKey: input.idempotencyKey,
+      listingId: listing.id,
+      buyerId: input.buyerId,
     },
-    { idempotencyKey: input.idempotencyKey }
-  );
+    transfers: [
+      {
+        account_id: listing.seller.yookassaShopId,
+        amount: toAmount(sellerAmount),
+        platform_fee_amount: toAmount(fee),
+        description: `Выплата за объявление «${listing.title}».`,
+      },
+    ],
+    idempotencyKey: input.idempotencyKey,
+  });
+  const confirmationToken = payment.confirmation?.confirmation_token;
+  if (!confirmationToken) {
+    await cancelYookassaPayment(payment.id, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
+    throw new AppError(errorCodes.INTERNAL, 'ЮKassa не выдала токен виджета', 502);
+  }
 
   const order = await prisma.order.create({
     data: {
@@ -142,17 +171,17 @@ export async function createEscrowOrder(input: {
       buyerId: input.buyerId,
       amount: listing.price,
       currency: listing.currency,
-      stripePaymentIntentId: paymentIntent.id,
+      yookassaPaymentId: payment.id,
       idempotencyKey: input.idempotencyKey,
     },
   }).catch(async (err: unknown) => {
     // Гонка двух параллельных POST /orders: второй получает 409, а не 500.
-    // Созданный нами PaymentIntent отменяем, чтобы не висел сиротой-холдом.
+    // Созданный нами платёж отменяем, чтобы не висел сиротой-холдом.
     if (
       typeof err === 'object' && err !== null &&
       'code' in err && (err as { code?: string }).code === 'P2002'
     ) {
-      await s.paymentIntents.cancel(paymentIntent.id).catch(() => undefined);
+      await cancelYookassaPayment(payment.id, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
       throw new AppError(errorCodes.CONFLICT, 'По этому объявлению уже есть заказ', 409);
     }
     throw err;
@@ -167,11 +196,11 @@ export async function createEscrowOrder(input: {
   if (reserved.count === 0) {
     // Статус увели из-под нас (модерация/снятие) — откатываем заказ и холд.
     await prisma.order.delete({ where: { id: order.id } }).catch(() => undefined);
-    await s.paymentIntents.cancel(paymentIntent.id).catch(() => undefined);
+    await cancelYookassaPayment(payment.id, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
     throw new AppError(errorCodes.CONFLICT, 'Объявление недоступно для покупки', 409);
   }
 
-  return { order, clientSecret: paymentIntent.client_secret ?? '' };
+  return { order, confirmationToken, paymentId: payment.id };
 }
 
 export async function releaseOrder(orderId: string, actorId: string): Promise<void> {
@@ -183,18 +212,18 @@ export async function releaseOrder(orderId: string, actorId: string): Promise<vo
   if (order.buyerId !== actorId) {
     throw new AppError(errorCodes.FORBIDDEN, 'Подтвердить получение может только покупатель', 403);
   }
-  // Эскроу: release только после авторизации средств (PAID = requires_capture).
-  // PENDING означает, что деньги ещё не удержаны — capture упадёт в Stripe.
+  // Эскроу: release только после авторизации средств (PAID = waiting_for_capture).
+  // PENDING означает, что деньги ещё не удержаны — capture упадёт в ЮKassa.
   if (order.status !== 'PAID') {
     throw new AppError(errorCodes.CONFLICT, `Нельзя подтвердить заказ в статусе ${order.status}`, 409);
   }
-  if (!order.stripePaymentIntentId) {
+  if (!order.yookassaPaymentId) {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
   }
 
   // Атомарный переход PAID -> RELEASING (тот же паттерн, что и отсчёт RESERVED
   // в createEscrowOrder): гонку двух параллельных release решает updateMany,
-  // а не чтение-проверка. Проигравший получает 409 и не доходит до Stripe —
+  // а не чтение-проверка. Проигравший получает 409 и не доходит до ЮKassa —
   // двойной выплаты не бывает даже при двух одновременных запросах.
   const claimed = await prisma.order.updateMany({
     where: { id: order.id, status: 'PAID' },
@@ -213,21 +242,18 @@ export async function releaseOrder(orderId: string, actorId: string): Promise<vo
       subject: 'Заказ подтверждён и выплата отправлена',
       template: 'order-updated',
       templateData: { orderId: order.id, amount: String(order.amount) },
-      text: `Покупатель подтвердил получение. Средства переведены на ваш счёт Stripe.`,
+      text: `Покупатель подтвердил получение. Средства переведены на ваш счёт ЮKassa.`,
     });
   }
 }
 
 /**
- * Выплата: capture + transfer + финальная транзакция.
+ * Выплата: capture сплит-платежа + финальная транзакция.
  *
- * Идемпотентность: capture и transfer идут с idempotency-ключами
- * `release-capture-{orderId}` / `release-{orderId}` (формат общий с
- * recovery-джобой worker'а — см. packages/shared). Если процесс падает между
- * capture и финальной транзакцией, повторный прогон с теми же ключами:
- * - capture уже сделан — Stripe вернёт исходный результат по ключу;
- * - transfer уже сделан — Stripe «дедуплицирует» по ключу и вернёт прежний
- *   transfer, не создавая второй выплаты.
+ * Идемпотентность: capture идёт с Idempotence-Key `release-capture-{orderId}`
+ * (единый с recovery-джобой worker'а — см. shared/constants). Если процесс
+ * падает между capture и финальной транзакцией, повторный прогон с тем же
+ * ключом ЮKassa «дедуплицирует» операцию и возвращает исходный результат.
  * Финальный переход RELEASING -> RELEASED дополнительно гейтится по статусу:
  * если заказ уже доведён, листинг не переворачивается повторно.
  */
@@ -236,44 +262,27 @@ export async function performRelease(order: {
   listingId: string;
   amount: unknown;
   currency: string;
-  stripePaymentIntentId: string | null;
+  yookassaPaymentId: string | null;
   idempotencyKey: string | null;
-  listing?: { seller?: { stripeAccountId?: string | null } } | null;
+  listing?: { seller?: { yookassaShopId?: string | null } } | null;
 }): Promise<void> {
-  const s = getStripe();
-  if (!order.stripePaymentIntentId) {
+  if (!order.yookassaPaymentId) {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
   }
 
-  const pi = await s.paymentIntents.capture(order.stripePaymentIntentId, {
-    idempotencyKey: releaseCaptureIdempotencyKey(order.id),
-  });
-  if (pi.status !== 'succeeded') {
+  const payment = await captureYookassaPayment(order.yookassaPaymentId, captureKeyFor(order.id));
+  if (payment.status !== 'succeeded') {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не может быть завершён', 409);
   }
 
-  const fee = Math.round((Number(order.amount) * env.STRIPE_PLATFORM_FEE_BASIS_POINTS) / 10000 * 100);
-  const destination = order.listing?.seller?.stripeAccountId;
-  if (!destination) {
-    throw new AppError(errorCodes.CONFLICT, 'Счёт продавца не найден', 409);
-  }
-  const transfer = await s.transfers.create(
-    {
-      amount: Math.round(Number(order.amount) * 100) - fee,
-      currency: order.currency.toLowerCase(),
-      destination,
-      transfer_group: `order-${order.idempotencyKey?.slice(0, 24)}`,
-    },
-    { idempotencyKey: releaseTransferIdempotencyKey(order.id) }
-  );
+  const fee = platformFeeForAmount(Number(order.amount));
 
   const finished = await prisma.$transaction(async (tx) => {
     const updated = await tx.order.updateMany({
       where: { id: order.id, status: 'RELEASING' },
       data: {
         status: 'RELEASED',
-        stripeTransferId: transfer.id,
-        platformFee: fee / 100,
+        platformFee: fee,
         releasedAt: new Date(),
       },
     });
@@ -286,12 +295,11 @@ export async function performRelease(order: {
   });
 
   if (!finished) {
-    logger.warn({ orderId: order.id, transferId: transfer.id }, 'release already completed by a concurrent run');
+    logger.warn({ orderId: order.id, paymentId: order.yookassaPaymentId }, 'release already completed by a concurrent run');
   }
 }
 
 export async function refundOrder(orderId: string, actorId: string, role: string): Promise<void> {
-  const s = getStripe();
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order) throw new AppError(errorCodes.NOT_FOUND, 'Заказ не найден', 404);
   const isBuyer = order.buyerId === actorId;
@@ -304,22 +312,19 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   if (order.status === 'REFUNDING') {
     throw new AppError(errorCodes.CONFLICT, 'Возврат уже обрабатывается', 409);
   }
-  // RELEASING/RELEASED — деньги движутся к продавцу: возврат запрещён.
+  // RELEASING/RELEASED — деньги движутся/ушли к продавцу: возврат запрещён
+  // (деньги уже вне эскроу; платформа получает их назад только отдельным
+  // refund из средств продавца — такие случаи разбирает админ вручную).
   if (order.status === 'RELEASED' || order.status === 'RELEASING' || order.status === 'REFUNDED') {
     throw new AppError(errorCodes.CONFLICT, `Нельзя вернуть заказ в статусе ${order.status}`, 409);
   }
-  if (!order.stripePaymentIntentId) {
+  if (!order.yookassaPaymentId) {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
-  }
-
-  const pi = await s.paymentIntents.retrieve(order.stripePaymentIntentId);
-  if (pi.status !== 'requires_capture' && pi.status !== 'succeeded') {
-    throw new AppError(errorCodes.CONFLICT, 'Платёж в неподходящем статусе', 409);
   }
 
   // Атомарный клейм возврата (PAID/…/DISPUTED -> REFUNDING). Гонку двух
   // параллельных refundOrder решает updateMany, как у releaseOrder: проигравший
-  // получает 409 и НЕ доходит до Stripe, поэтому двойного cancel/refund не бывает.
+  // получает 409 и НЕ доходит до ЮKassa, поэтому двойного cancel/refund не бывает.
   const claimed = await prisma.order.updateMany({
     where: { id: order.id, status: { in: ['PENDING', 'PAID', 'DISPUTED'] } },
     data: { status: 'REFUNDING' },
@@ -330,25 +335,33 @@ export async function refundOrder(orderId: string, actorId: string, role: string
 
   const previousStatus = order.status;
   try {
-    // Идемпотентность: один и тот же заказ не отменяет/не возвращает дважды
-    // даже если наш пакет дойдёт до Stripe повторно (см. shared/constants).
-    await s.paymentIntents.cancel(order.stripePaymentIntentId, {
-      idempotencyKey: refundCancelIdempotencyKey(order.id),
-    }).catch(() => {
-      return s.refunds.create(
-        { payment_intent: order.stripePaymentIntentId! },
-        { idempotencyKey: refundIdempotencyKey(order.id) }
-      );
-    });
+    const payment = await getYookassaPayment(order.yookassaPaymentId);
+    if (payment.status === 'succeeded') {
+      // Деньги уже удержаны после capture — оформляем полный возврат
+      // (комиссия платформы возвращается за счёт магазина продавца).
+      await refundYookassaPayment(order.yookassaPaymentId, Number(order.amount), refundKeyFor(order.id));
+    } else if (payment.status === 'waiting_for_capture' || payment.status === 'pending') {
+      await cancelYookassaPayment(order.yookassaPaymentId, refundCancelKeyFor(order.id)).catch(async (err) => {
+        // Могли опоздать: холд истёк и ЮKassa уже отменила платёж сама.
+        const now = await getYookassaPayment(order.yookassaPaymentId!);
+        if (now.status === 'canceled') return; // деньги уже вернулись покупателю
+        throw err;
+      });
+    } else if (payment.status === 'canceled') {
+      // Деньги уже вернулись покупателю (авто-отмена истёкшего холда) — идемпотентно завершаем.
+      logger.info({ orderId: order.id, paymentId: order.yookassaPaymentId }, 'refund: payment already canceled');
+    } else {
+      throw new AppError(errorCodes.CONFLICT, 'Платёж в неподходящем статусе', 409);
+    }
   } catch (err) {
-    // Stripe недоступен/отклонил — не оставляем заказ навсегда в REFUNDING:
+    // ЮKassa недоступна/отклонила — не оставляем заказ навсегда в REFUNDING:
     // возвращаем статус, с которого клеймили. Гейтим по REFUNDING, чтобы не
     // затереть параллельный переход (например, вебхук уже провёл REFUNDED).
     await prisma.order.updateMany({
       where: { id: order.id, status: 'REFUNDING' },
       data: { status: previousStatus },
     });
-    logger.warn({ err, orderId: order.id }, 'refund: stripe call failed, order moved back from REFUNDING');
+    logger.warn({ err, orderId: order.id }, 'refund: yookassa call failed, order moved back from REFUNDING');
     throw err;
   }
 
@@ -364,38 +377,105 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   });
 }
 
-/** Вебхук Stripe: проверка подписи + идемпотентная обработка */
-export async function handleStripeWebhook(
+/**
+ * Вебхук ЮKassa. Подписи нет: подлинность уведомления проверяем по
+ * 1) IP из официального аллоулиста ЮKassa; 2) повторному GET текущего статуса
+ * платежа (сверяем со статусом из уведомления). Идемпотентность — через redis.
+ */
+export async function handleYookassaNotification(
   rawBody: Buffer,
-  signature: string | undefined
+  ip?: string
 ): Promise<{ received: boolean; handled?: string }> {
-  const s = getStripe();
-  if (!env.STRIPE_WEBHOOK_SECRET || !signature) {
-    throw new AppError(errorCodes.UNAUTHORIZED, 'Нет подписи вебхука', 401);
+  if (!env.YOOKASSA_INSECURE_WEBHOOKS && (!ip || !isTrustedYookassaIp(ip))) {
+    logger.warn({ ip }, 'yookassa webhook from untrusted ip');
+    throw new AppError(errorCodes.UNAUTHORIZED, 'Неизвестный отправитель уведомления', 401);
   }
-  let event: Stripe.Event;
+
+  let body: { type?: string; event?: string; object?: unknown };
   try {
-    event = s.webhooks.constructEvent(rawBody, signature, env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    logger.warn({ err }, 'stripe webhook signature invalid');
-    throw new AppError(errorCodes.UNAUTHORIZED, 'Неверная подпись вебхука', 401);
+    body = JSON.parse(rawBody.toString('utf8')) as typeof body;
+  } catch {
+    throw new AppError(errorCodes.VALIDATION, 'Некорректное тело уведомления', 400);
+  }
+  if (body.type !== 'notification') {
+    throw new AppError(errorCodes.VALIDATION, 'Ожидалось уведомление ЮKassa', 400);
+  }
+  const event = body.event;
+  const object = body.object as
+    | ({ id?: string; payment_id?: string; status?: string } & Record<string, unknown>)
+    | undefined;
+  if (!event || !object?.id) {
+    throw new AppError(errorCodes.VALIDATION, 'Некорректное уведомление', 400);
   }
 
   const redis = getRedis();
-  const dedupe = await redis.set(`stripe:webhook:${event.id}`, '1', 'EX', 86400, 'NX');
+  const dedupe = await redis.set(`yookassa:webhook:${event}:${object.id}`, '1', 'EX', 86400, 'NX');
   if (dedupe !== 'OK') {
     return { received: true, handled: 'duplicate' };
   }
 
-  switch (event.type) {
-    case 'payment_intent.created': {
-      // Только создан — деньги ещё не авторизованы. Ничего не меняем.
-      break;
+  if (event === 'refund.succeeded') {
+    const paymentId = object.payment_id;
+    if (!paymentId) return { received: true, handled: event };
+    const payment = await getYookassaPayment(paymentId).catch((err) => {
+      logger.warn({ err, paymentId }, 'yookassa refund webhook: payment lookup failed, skipping');
+      return null;
+    });
+    if (!payment) return { received: true, handled: 'verification_failed' };
+
+    const existing = await prisma.order.findFirst({
+      where: { yookassaPaymentId: paymentId },
+      select: { id: true, listingId: true, status: true },
+    });
+    if (!existing) return { received: true, handled: event };
+
+    if (existing.status === 'RELEASED' || existing.status === 'RELEASING') {
+      // Деньги уже переведены продавцу (или переводятся): платформа получила
+      // возврат средств продавца, но «авто-возврат» покупателю тут запрещён —
+      // иначе сумма спишется дважды. Статус не трогаем, уведомляем админа.
+      logger.warn({
+        orderId: existing.id, paymentId, refundId: object.id, status: existing.status,
+      }, 'refund after pay-out; manual resolution required');
+      await notifyAdmin(
+        'Возврат по уже выплаченной сделке',
+        `Refund ${object.id} по платежу ${paymentId} на сумму ${payment.amount?.value ?? '?'} RUB. ` +
+          `Заказ ${existing.id} уже переведён продавцу (статус ${existing.status}): ` +
+          `возврат покупателю оформите вручную через кабинет ЮKassa.`
+      );
+      return { received: true, handled: event };
     }
-    case 'payment_intent.amount_capturable_updated': {
-      // Эскроу: средства авторизованы (requires_capture) и удерживаются платформой.
-      const pi = event.data.object as Stripe.PaymentIntent;
-      const orderKey = pi.metadata?.orderKey;
+
+    const marked = await prisma.order.updateMany({
+      where: { yookassaPaymentId: paymentId, status: { notIn: ['REFUNDED', 'RELEASING', 'RELEASED', 'DISPUTED'] } },
+      data: { status: 'REFUNDED' },
+    });
+    if (marked.count > 0) {
+      const target = await prisma.order.findFirst({
+        where: { yookassaPaymentId: paymentId },
+        select: { listingId: true },
+      });
+      if (target) await unlockListing(target.listingId);
+      logger.info({ orderId: existing.id, paymentId, refundId: object.id }, 'payment refunded via webhook');
+    }
+    return { received: true, handled: event };
+  }
+
+  // Остальные события — платежи. Платёж ищем по id из уведомления.
+  const paymentId = (object as { id: string }).id;
+  const payment = await getYookassaPayment(paymentId).catch((err) => {
+    logger.warn({ err, paymentId }, 'yookassa payment webhook: payment lookup failed, skipping');
+    return null;
+  });
+  if (!payment || payment.status !== object.status) {
+    // Устаревшая/повторная доставка: статус в уведомлении не совпал с текущим.
+    logger.warn({ paymentId, event, objectStatus: object.status, currentStatus: payment?.status }, 'yookassa webhook status mismatch, skipping');
+    return { received: true, handled: 'stale' };
+  }
+
+  const orderKey = payment.metadata?.orderKey;
+  switch (payment.status) {
+    case 'waiting_for_capture': {
+      // Эскроу: средства авторизованы и удерживаются платформой.
       if (orderKey) {
         await prisma.order.updateMany({
           where: { idempotencyKey: orderKey, status: 'PENDING' },
@@ -404,37 +484,29 @@ export async function handleStripeWebhook(
       }
       break;
     }
-    case 'payment_intent.succeeded': {
-      // Succeeded наступает ПОСЛЕ capture в releaseOrder.
-      // releaseOrder уже перевёл заказ в RELEASED+SOLD в той же транзакции,
-      // поэтому вебхук только доводит PENDING/PAID-заказы до PAID и
-      // никогда не делает авто-RELEASE без подтверждения покупателя.
-      const pi = event.data.object as Stripe.PaymentIntent;
-      const orderKey = pi.metadata?.orderKey;
+    case 'succeeded': {
+      // Succeeded наступает ПОСЛЕ capture в releaseOrder (или вручную из
+      // кабинета ЮKassa). Никогда не делаем авто-RELEASE без подтверждения
+      // покупателя: только доводим PENDING/PAID до PAID.
       if (orderKey) {
         const existing = await prisma.order.findUnique({
           where: { idempotencyKey: orderKey },
           select: { id: true, status: true },
         });
         if (existing && (existing.status === 'PENDING' || existing.status === 'PAID')) {
-          // Если capture делал releaseOrder — заказ уже RELEASED, сюда не попадём.
-          // Если Stripe в automatic-режиме — фиксируем оплату, но не выдаём товар.
           await prisma.order.update({
             where: { id: existing.id },
             data: { status: 'PAID' },
           });
-          logger.info({ orderKey, pi: pi.id }, 'escrow authorized, awaiting buyer confirmation');
+          logger.info({ orderKey, paymentId }, 'escrow authorized, awaiting buyer confirmation');
         }
       }
       break;
     }
-    case 'payment_intent.payment_failed':
-    case 'payment_intent.canceled': {
-      // Оплата не состоялась — удаляем PENDING-заказ, чтобы не блокировать
-      // повторную покупку (createEscrowOrder запрещает второй заказ на листинг),
-      // и снимаем резерв с объявления.
-      const pi = event.data.object as Stripe.PaymentIntent;
-      const orderKey = pi.metadata?.orderKey;
+    case 'canceled': {
+      // Оплата не состоялась или холд отменён. PENDING-заказ удаляем (иначе он
+      // заблокирует повторную покупку), PAID/… переводим в REFUNDED (деньги уже
+      // вернулись покупателю) и снимаем резерв с объявления.
       if (orderKey) {
         const doomed = await prisma.order.findFirst({
           where: { idempotencyKey: orderKey, status: 'PENDING' },
@@ -445,146 +517,24 @@ export async function handleStripeWebhook(
           await unlockListing(doomed.listingId);
         }
       }
-      break;
-    }
-    case 'account.updated': {
-      const account = event.data.object as Stripe.Account;
-      await prisma.user.updateMany({
-        where: { stripeAccountId: account.id },
-        data: { stripeOnboarded: account.details_submitted ?? false },
+      const held = await prisma.order.updateMany({
+        where: { yookassaPaymentId: paymentId, status: { in: ['PAID', 'DISPUTED'] } },
+        data: { status: 'REFUNDED' },
       });
-      break;
-    }
-    case 'charge.refunded': {
-      const charge = event.data.object as Stripe.Charge;
-      if (charge.payment_intent && typeof charge.payment_intent === 'string') {
+      if (held.count > 0) {
         const target = await prisma.order.findFirst({
-          where: { stripePaymentIntentId: charge.payment_intent },
-          select: { id: true, listingId: true, status: true },
+          where: { yookassaPaymentId: paymentId },
+          select: { listingId: true },
         });
-        if (target && target.status !== 'REFUNDED') {
-          await prisma.order.update({
-            where: { id: target.id },
-            data: { status: 'REFUNDED' },
-          });
-          await unlockListing(target.listingId);
-        }
-      }
-      break;
-    }
-    case 'charge.dispute.created': {
-      // Чарджбэк: покупатель оспорил платёж через банк. Дальше — по статусу заказа.
-      // Это важно: банковский чарджбэк может прийти спустя недели после сделки.
-      const dispute = event.data.object as Stripe.Dispute;
-      const piId = await resolveDisputePaymentIntent(dispute);
-      if (piId) {
-        const existing = await prisma.order.findFirst({
-          where: { stripePaymentIntentId: piId },
-          select: { id: true, status: true },
-        });
-        if (existing && (existing.status === 'RELEASED' || existing.status === 'RELEASING')) {
-          // Деньги уже переведены продавцу (или переводятся): платформа не может
-          // забрать их через Stripe, а «диспутом» такой заказ помечать нельзя —
-          // иначе при lost система попробует вернуть уже выплаченное. Статус НЕ
-          // трогаем, уведомляем админа про ручное урегулирование вне автоматики.
-          logger.warn({
-            orderId: existing.id, piId, disputeId: dispute.id, status: existing.status,
-          }, 'chargeback opened for already-paid-out order; manual resolution required');
-          await notifyAdmin(
-            'Спор по уже выплаченной сделке',
-            `Dispute ${dispute.id} по PaymentIntent ${piId} на сумму ${dispute.amount}. ` +
-              `Заказ ${existing.id} уже переведён продавцу (статус ${existing.status}): ` +
-              `возврат через Stripe невозможен, урегулирование вручную.`
-          );
-          break;
-        }
-        if (existing && existing.status === 'REFUNDING') {
-          // Чарджбэк пересекается с уже идущим возвратом: статус не трогаем.
-          logger.warn({
-            orderId: existing.id, piId, disputeId: dispute.id,
-          }, 'chargeback opened while refund in progress; keeping REFUNDING');
-          await notifyAdmin(
-            'Спор пересекается с возвратом',
-            `Dispute ${dispute.id} по PaymentIntent ${piId} открыт, пока заказ ${existing.id} уже был в REFUNDING. Резерв/возврат продолжаются; требуйте уточнения.`
-          );
-          break;
-        }
-        const marked = await prisma.order.updateMany({
-          where: { stripePaymentIntentId: piId, status: { notIn: ['REFUNDED', 'DISPUTED'] } },
-          data: { status: 'DISPUTED' },
-        });
-        if (marked.count > 0) {
-          logger.warn({ piId, disputeId: dispute.id }, 'chargeback dispute opened');
-          await notifyAdmin(
-            'Открыт спор по платежу (chargeback)',
-            `Dispute ${dispute.id} по PaymentIntent ${piId} на сумму ${dispute.amount}. Заказ переведён в DISPUTED, требуется решение.`
-          );
-        }
-      }
-      break;
-    }
-    case 'charge.dispute.closed': {
-      // Спор закрыт: won — деньги остались у платформы, заказ ждёт
-      // подтверждения покупателя; lost — возврат + снятие резерва.
-      // Переходы только из DISPUTED, чтобы не затереть параллельный release.
-      const dispute = event.data.object as Stripe.Dispute;
-      const piId = await resolveDisputePaymentIntent(dispute);
-      if (piId && (dispute.status === 'won' || dispute.status === 'lost')) {
-        if (dispute.status === 'lost') {
-          const lost = await prisma.order.findFirst({
-            where: { stripePaymentIntentId: piId, status: 'DISPUTED' },
-            select: { id: true, listingId: true },
-          });
-          if (lost) {
-            await prisma.order.update({
-              where: { id: lost.id },
-              data: { status: 'REFUNDED' },
-            });
-            await unlockListing(lost.listingId);
-            logger.warn({ piId, disputeId: dispute.id }, 'chargeback lost, order refunded');
-            await notifyAdmin(
-              'Спор проигран, заказ возвращён',
-              `Dispute ${dispute.id} по PaymentIntent ${piId} проигран. Заказ переведён в REFUNDED.`
-            );
-          }
-        } else {
-          await prisma.order.updateMany({
-            where: { stripePaymentIntentId: piId, status: 'DISPUTED' },
-            data: { status: 'PAID' },
-          });
-          logger.info({ piId, disputeId: dispute.id }, 'chargeback won, order back to PAID');
-        }
+        if (target) await unlockListing(target.listingId);
       }
       break;
     }
     default:
       break;
   }
-  return { received: true, handled: event.type };
+  return { received: true, handled: event };
 }
 
-export async function createStripeConnectAccount(sellerId: string): Promise<{ accountId: string }> {
-  const s = getStripe();
-  const account = await s.accounts.create({ type: 'express' });
-  await prisma.user.update({ where: { id: sellerId }, data: { stripeAccountId: account.id } });
-  return { accountId: account.id };
-}
-
-/**
- * Связка Dispute -> PaymentIntent.
- * Новые версии API отдают payment_intent прямо в объекте спора,
- * для старых — достаём через charge.
- */
-async function resolveDisputePaymentIntent(dispute: Stripe.Dispute): Promise<string | null> {
-  const direct = (dispute as unknown as { payment_intent?: unknown }).payment_intent;
-  if (typeof direct === 'string') return direct;
-  const chargeId = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
-  if (!chargeId) return null;
-  try {
-    const charge = await getStripe().charges.retrieve(chargeId);
-    return typeof charge.payment_intent === 'string' ? charge.payment_intent : null;
-  } catch (err) {
-    logger.warn({ err, chargeId }, 'stripe dispute charge lookup failed');
-    return null;
-  }
-}
+/** Сверка DI/приватных хелперов для внутренних нужд. */
+export type { YooPayment };

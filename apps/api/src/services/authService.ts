@@ -231,7 +231,8 @@ export function publicUser(user: {
   isBanned: boolean;
   rating: number;
   ratingCount: number;
-  stripeOnboarded: boolean;
+  yookassaShopId: string | null;
+  yookassaOnboarded: boolean;
   createdAt: Date;
 }) {
   return {
@@ -246,7 +247,8 @@ export function publicUser(user: {
     isBanned: user.isBanned,
     rating: user.rating,
     ratingCount: user.ratingCount,
-    stripeOnboarded: user.stripeOnboarded,
+    yookassaShopId: user.yookassaShopId,
+    yookassaOnboarded: user.yookassaOnboarded,
     createdAt: user.createdAt,
   };
 }

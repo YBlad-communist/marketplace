@@ -1,29 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
 import { isInfraAvailable } from './helpers.js';
+import { installYookassaFake } from './yookassa-fake.js';
 
-// Мокаем Stripe-SDK: реальный createEscrowOrder/releaseOrder/refundOrder,
+// Мокаем сеть ЮKassa: реальные createEscrowOrder/releaseOrder/refundOrder,
 // поэтому проверки статусных переходов заказа честные.
-vi.mock('stripe', () => {
-  class FakeStripe {
-    paymentIntents = {
-      create: vi.fn(async () => ({ id: 'pi_rev_mock', client_secret: 'pi_rev_secret' })),
-      retrieve: vi.fn(async () => ({ id: 'pi_rev_mock', status: 'requires_capture' })),
-      capture: vi.fn(async () => ({ status: 'succeeded' })),
-      cancel: vi.fn(async () => ({})),
-    };
-    transfers = {
-      create: vi.fn(async () => ({ id: 'tr_rev_mock' })),
-    };
-    refunds = {
-      create: vi.fn(async () => ({ id: 're_rev_mock' })),
-    };
-  }
-  return { __esModule: true, default: FakeStripe };
-});
+installYookassaFake({ createStatus: 'waiting_for_capture' });
 
 const app = createApp();
 
@@ -54,7 +39,7 @@ async function createOrderAndPay(listingId: string, keySuffix: string): Promise<
     .send({ listingId, idempotencyKey: `rev-${Date.now()}-${keySuffix}` });
   expect(created.status).toBe(201);
   const orderId = created.body.data.order.id as string;
-  // В тесте эмулируем вебхук payment_intent.amount_capturable_updated: PENDING -> PAID.
+  // В тесте эмулируем вебхук payment.waiting_for_capture: PENDING -> PAID.
   await prisma.order.update({ where: { id: orderId }, data: { status: 'PAID' } });
   return orderId;
 }
@@ -77,7 +62,7 @@ beforeAll(async () => {
   sellerId = seller.id;
   await prisma.user.update({
     where: { id: seller.id },
-    data: { stripeAccountId: 'acct_rev', stripeOnboarded: true },
+    data: { yookassaShopId: 'shop_rev', yookassaOnboarded: true },
   });
 
   const buyerPhone = `+7${Date.now().toString().slice(-9)}2`;

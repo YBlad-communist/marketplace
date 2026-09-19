@@ -1,22 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
 import { isInfraAvailable } from './helpers.js';
+import { installYookassaFake } from './yookassa-fake.js';
 
-vi.mock('stripe', () => {
-  class FakeStripe {
-    paymentIntents = {
-      create: vi.fn(async () => ({ id: 'pi_guard_mock', client_secret: 'pi_guard_secret' })),
-      retrieve: vi.fn(async () => ({ id: 'pi_guard_mock', status: 'requires_capture' })),
-      capture: vi.fn(async () => ({ status: 'succeeded' })),
-      cancel: vi.fn(async () => ({})),
-    };
-    transfers = { create: vi.fn(async () => ({ id: 'tr_guard_mock' })) };
-  }
-  return { __esModule: true, default: FakeStripe };
-});
+installYookassaFake({ createStatus: 'waiting_for_capture' });
 
 const app = createApp();
 
@@ -46,7 +36,7 @@ beforeAll(async () => {
   const sellerPhone = `+7${unique.toString().slice(-9)}2`;
   await request(app).post('/api/auth/register').send({ name: 'Продавец-guard', phone: sellerPhone, password, confirmPassword: password });
   const seller = await prisma.user.findUniqueOrThrow({ where: { phone: sellerPhone } });
-  await prisma.user.update({ where: { id: seller.id }, data: { stripeAccountId: 'acct_guard', stripeOnboarded: true } });
+  await prisma.user.update({ where: { id: seller.id }, data: { yookassaShopId: 'shop_guard', yookassaOnboarded: true } });
   const sellerLogin = await request(app).post('/api/auth/login').send({ phone: sellerPhone, password });
   sellerToken = sellerLogin.body.data.accessToken as string;
 

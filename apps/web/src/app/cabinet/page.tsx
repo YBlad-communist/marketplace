@@ -61,11 +61,11 @@ export default function CabinetPage() {
             <div className="muted">
               Рейтинг: {typeof user?.rating === 'number' ? user.rating.toFixed(1) : '—'} ({user?.ratingCount ?? 0} отзывов)
             </div>
-            {user?.stripeOnboarded ? (
+            {user?.yookassaOnboarded ? (
               <span className="badge-green">Выплаты подключены</span>
             ) : (
               <Link href="/seller/connect" className="btn-secondary text-xs">
-                Подключить выплаты (Stripe)
+                Подключить выплаты (ЮKassa)
               </Link>
             )}
             <Link href="/cabinet/sessions" className="btn-secondary text-xs">

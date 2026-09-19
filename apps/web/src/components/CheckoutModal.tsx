@@ -1,14 +1,21 @@
 'use client';
 
-import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
-import { loadStripe, StripeElementsOptions } from '@stripe/stripe-js';
-import { useState } from 'react';
-import { STRIPE_PUBLISHABLE_KEY, post } from '@/lib/api';
+import { useEffect, useRef, useState } from 'react';
+import { post } from '@/lib/api';
 import { formatPrice } from '@/lib/format';
 
-const stripePromise = STRIPE_PUBLISHABLE_KEY
-  ? loadStripe(STRIPE_PUBLISHABLE_KEY)
-  : Promise.resolve(null);
+declare global {
+  interface Window {
+    YooMoneyCheckoutWidget?: new (options: {
+      confirmation_token: string;
+      return_url: string;
+      error_callback?: (error: unknown) => void;
+    }) => {
+      render(containerId: string): void;
+      destroy(): void;
+    };
+  }
+}
 
 interface Props {
   listingId: string;
@@ -18,97 +25,86 @@ interface Props {
   onClose: () => void;
 }
 
-function CheckoutForm({ listingId, price, currency, onDone, onClose }: Props) {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [error, setError] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
-  // Idempotency-ключ стабилен на время открытой модалки: даблклик не создаёт дубли заказов.
-  const [idempotencyKey] = useState(() => `ord-${crypto.randomUUID()}`);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stripe || !elements) return;
-    setProcessing(true);
-    setError(null);
-    const submitResult = await elements.submit().catch(() => null);
-    if (submitResult && 'error' in submitResult && submitResult.error) {
-      setError((submitResult.error as { message?: string }).message ?? 'Проверьте данные карты');
-      setProcessing(false);
+function loadWidgetScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.YooMoneyCheckoutWidget) {
+      resolve();
       return;
     }
-    const res = await post<{ data: { clientSecret: string } }>('/api/orders', {
-      listingId,
-      idempotencyKey,
-    }).catch((err: Error) => {
-      setError(err.message);
-      setProcessing(false);
-      return null;
-    });
-    if (!res) return;
-
-    const { error: confirmError } = await stripe.confirmPayment({
-      elements,
-      clientSecret: res.data.clientSecret,
-      confirmParams: { return_url: `${window.location.origin}/orders` },
-      redirect: 'if_required',
-    });
-    if (confirmError) {
-      setError(confirmError.message ?? 'Ошибка оплаты');
-      setProcessing(false);
+    const existing = document.querySelector('script[src*="checkout-widget"]') as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error('Не удалось загрузить платёжный виджет')));
       return;
     }
-    onDone();
-  };
-
-  return (
-    <form onSubmit={submit} className="space-y-4">
-      <PaymentElement />
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="flex gap-2">
-        <button type="button" className="btn-secondary flex-1" onClick={onClose} disabled={processing}>
-          Отмена
-        </button>
-        <button className="btn-primary flex-1" disabled={!stripe || processing}>
-          {processing ? 'Обработка…' : `Оплатить ${formatPrice(price, currency)}`}
-        </button>
-      </div>
-    </form>
-  );
+    const script = document.createElement('script');
+    script.src = 'https://yookassa.ru/checkout-widget/v1/checkout-widget.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Не удалось загрузить платёжный виджет'));
+    document.head.appendChild(script);
+  });
 }
 
-export function CheckoutModal({ listingId, price, currency, onDone, onClose }: Props) {
-  const options: StripeElementsOptions = {
-    mode: 'payment',
-    amount: Math.round(price * 100),
-    currency: currency.toLowerCase(),
-  };
+export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const widgetRef = useRef<{ destroy: () => void } | null>(null);
+  // Idempotency-ключ стабилен на время открытой модалки: повторный рендер
+  // виджета не создаёт дубли заказов (при переоткрытии — новый ключ).
+  const idempotencyKeyRef = useRef<string>(`ord-${crypto.randomUUID()}`);
 
-  if (!STRIPE_PUBLISHABLE_KEY) {
-    return (
-      <div className="card fixed inset-0 z-50 m-auto flex h-fit max-w-md flex-col gap-4 p-6">
-        <h3 className="text-lg font-semibold">Оплата недоступна</h3>
-        <p className="text-sm text-gray-600">
-          Stripe не настроен. Задайте <code>NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY</code> и
-          <code> STRIPE_SECRET_KEY</code> в .env.
-        </p>
-        <button className="btn-secondary" onClick={onClose}>
-          Закрыть
-        </button>
-      </div>
-    );
-  }
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await post<{ data: { order: { id: string }; confirmationToken: string } }>('/api/orders', {
+          listingId,
+          idempotencyKey: idempotencyKeyRef.current,
+        });
+        if (cancelled) return;
+        await loadWidgetScript();
+        if (cancelled) return;
+
+        const widget = new window.YooMoneyCheckoutWidget!({
+          confirmation_token: res.data.confirmationToken,
+          return_url: `${window.location.origin}/orders/${res.data.order.id}`,
+          error_callback: () => setError('Не удалось обработать платёж. Попробуйте ещё раз.'),
+        });
+        widgetRef.current = widget;
+        widget.render('yoomoney-checkout');
+        setStatus('ready');
+      } catch (err) {
+        if (cancelled) return;
+        setStatus('error');
+        setError(err instanceof Error ? err.message : 'Ошибка создания заказа');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      widgetRef.current?.destroy();
+      widgetRef.current = null;
+    };
+  }, [listingId]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-        <h3 className="mb-4 text-lg font-semibold">Безопасная сделка</h3>
-        <p className="mb-4 text-xs text-gray-500">
-          Деньги удерживаются платформой до подтверждения получения товара.
+        <h3 className="mb-1 text-lg font-semibold">Безопасная сделка</h3>
+        <p className="mb-4 text-sm text-gray-600">
+          {formatPrice(price, currency)} — деньги удерживаются платформой до подтверждения получения товара.
         </p>
-        <Elements stripe={stripePromise} options={options}>
-          <CheckoutForm listingId={listingId} price={price} currency={currency} onDone={onDone} onClose={onClose} />
-        </Elements>
+        {status === 'loading' && <p className="text-sm text-gray-500">Подготавливаем оплату…</p>}
+        {status === 'error' && <p className="mb-4 text-sm text-red-600">{error ?? 'Не удалось начать оплату'}</p>}
+        {status === 'ready' && (
+          <div id="yoomoney-checkout" ref={containerRef} className="min-h-[320px]" />
+        )}
+        {status === 'error' && (
+          <button type="button" className="btn-secondary w-full" onClick={onClose}>
+            Закрыть
+          </button>
+        )}
       </div>
     </div>
   );

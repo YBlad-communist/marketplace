@@ -4,7 +4,6 @@ import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
-  oauthExchangeSchema,
   refreshTokenSchema,
   registerSchema,
   requestVerificationSchema,
@@ -16,9 +15,8 @@ import {
 import { validate } from '../middleware/validate.js';
 import { authenticate, extractTokenFromCookie } from '../middleware/auth.js';
 import { ipRateLimit } from '../middleware/rateLimit.js';
-import { requireTurnstile } from '../middleware/turnstile.js';
+import { requireCaptcha } from '../middleware/captcha.js';
 import * as authService from '../services/authService.js';
-import * as oauthService from '../services/oauthService.js';
 import {
   findSessionFamilyByToken,
   getActiveSessions,
@@ -44,7 +42,7 @@ function refreshTokenFromReq(req: Request): string | null {
 router.post(
   '/register',
   ipRateLimit('auth:register', 60_000, 10),
-  requireTurnstile,
+  requireCaptcha,
   validate(registerSchema),
   async (req, res, next) => {
     try {
@@ -59,7 +57,7 @@ router.post(
 router.post(
   '/login',
   ipRateLimit('auth:login', 60_000, 10),
-  requireTurnstile,
+  requireCaptcha,
   validate(loginSchema),
   async (req, res, next) => {
     try {
@@ -214,51 +212,10 @@ router.delete('/sessions/:familyId', authenticate, async (req, res, next) => {
   }
 });
 
-router.get('/oauth/google', async (req, res, next) => {
-  try {
-    const state = await oauthService.createOAuthState();
-    res.redirect(oauthService.googleAuthorizationUrl(state));
-  } catch (err) {
-    next(err);
-  }
+router.get('/oauth/google', async (_req, res) => {
+  // OAuth отключён до подключения реального провайдера: вход только по телефону.
+  // Заглушка возвращает понятное сообщение и не выполняет внешних запросов.
+  res.redirect(`${env.APP_URL}/login?error=oauth`);
 });
-
-router.get('/oauth/google/callback', async (req, res, next) => {
-  try {
-    const code = typeof req.query.code === 'string' ? req.query.code : null;
-    const state = typeof req.query.state === 'string' ? req.query.state : null;
-    if (!code || !state || !(await oauthService.consumeOAuthState(state))) {
-      return res.redirect(`${env.APP_URL}/login?error=oauth`);
-    }
-    const result = await oauthService.googleCallback(code, {
-      userAgent: req.headers['user-agent'],
-      ip: req.ip,
-    });
-    setRefreshCookie(res, result.refreshToken);
-    // В URL отдаём только одноразовый код обмена, сам access-токен
-    // фронт заберёт через POST /api/auth/oauth/exchange.
-    const loginCode = await oauthService.createLoginCode(result.accessToken);
-    res.redirect(`${env.APP_URL}/oauth/success?code=${encodeURIComponent(loginCode)}`);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post(
-  '/oauth/exchange',
-  ipRateLimit('auth:oauth-exchange', 60_000, 10),
-  validate(oauthExchangeSchema),
-  async (req, res, next) => {
-    try {
-      const accessToken = await oauthService.consumeLoginCode(req.body.code);
-      if (!accessToken) {
-        throw new AppError(errorCodes.UNAUTHORIZED, 'Код обмена недействителен или истёк', 401);
-      }
-      res.json({ data: { accessToken } });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
 
 export default router;

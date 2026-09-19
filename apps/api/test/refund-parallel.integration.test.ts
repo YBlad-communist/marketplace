@@ -1,31 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
 import { isInfraAvailable } from './helpers.js';
+import { installYookassaFake } from './yookassa-fake.js';
 
-// Считаем все обращения к Stripe при возврате: двойной возврат = cancel или
-// refunds.create вызван больше одного раза на один заказ.
-const fakeCancel = vi.fn(async () => ({}));
-const fakeRefundsCreate = vi.fn(async () => ({ id: 're_par_mock' }));
-vi.mock('stripe', () => {
-  class FakeStripe {
-    paymentIntents = {
-      create: vi.fn(async () => ({ id: 'pi_par_mock', client_secret: 'pi_par_secret' })),
-      retrieve: vi.fn(async () => ({ id: 'pi_par_mock', status: 'requires_capture' })),
-      capture: vi.fn(async () => ({ status: 'succeeded' })),
-      cancel: fakeCancel,
-    };
-    refunds = {
-      create: fakeRefundsCreate,
-    };
-    transfers = {
-      create: vi.fn(async () => ({ id: 'tr_par_mock' })),
-    };
-  }
-  return { __esModule: true, default: FakeStripe };
-});
+// Считаем обращения к ЮKassa при возврате: двойной возврат = cancel или
+// refund вызван больше одного раза на один заказ.
+// createStatus waiting_for_capture — значит возврат идёт через cancel холда.
+const fake = installYookassaFake({ createStatus: 'waiting_for_capture' });
 
 const app = createApp();
 
@@ -58,7 +42,7 @@ beforeAll(async () => {
   const sellerPhone = `+7${unique.toString().slice(-9)}1`;
   await request(app).post('/api/auth/register').send({ name: 'Продавец-рефаунд', phone: sellerPhone, password, confirmPassword: password });
   const seller = await prisma.user.findUniqueOrThrow({ where: { phone: sellerPhone } });
-  await prisma.user.update({ where: { id: seller.id }, data: { stripeAccountId: 'acct_par', stripeOnboarded: true } });
+  await prisma.user.update({ where: { id: seller.id }, data: { yookassaShopId: 'shop_par', yookassaOnboarded: true } });
   const sellerLogin = await request(app).post('/api/auth/login').send({ phone: sellerPhone, password });
   sellerToken = sellerLogin.body.data.accessToken as string;
 
@@ -82,10 +66,10 @@ afterAll(async () => {
 });
 
 describeInfra('refund: параллельный вызов не даёт двойного возврата', () => {
-  it('два одновременных refund: один 200, второй 409, cancel/refund вызваны ровно один раз', async () => {
+  it('два одновременных refund: один 200, второй 409, cancel вызван ровно один раз', async () => {
     const { orderId, listingId } = await makePaidOrder('race');
-    fakeCancel.mockClear();
-    fakeRefundsCreate.mockClear();
+    fake.calls.cancel = 0;
+    fake.calls.refund = 0;
 
     const [a, b] = await Promise.all([
       request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`),
@@ -94,42 +78,56 @@ describeInfra('refund: параллельный вызов не даёт дво�
 
     const statuses = [a.status, b.status].sort();
     expect(statuses).toEqual([200, 409]);
-    const [winner, loser] = a.status === 200 ? [a, b] : [b, a];
-    expect(winner.body.error ?? undefined).toBeUndefined();
+    const loser = a.status === 409 ? a : b;
     expect(loser.body.error.code).toBe('CONFLICT');
 
     const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(order.status).toBe('REFUNDED');
     const listing = await prisma.listing.findUniqueOrThrow({ where: { id: listingId } });
     expect(listing.status).toBe('ACTIVE');
-    expect(fakeCancel).toHaveBeenCalledTimes(1);
-    expect(fakeRefundsCreate).not.toHaveBeenCalled();
+    expect(fake.calls.cancel).toBe(1);
+    expect(fake.calls.refund).toBe(0);
   });
 
-  it('повторный refund уже возвращённого заказа отклоняется (409), Stripe не трогаем', async () => {
+  it('повторный refund уже возвращённого заказа отклоняется (409), ЮKassa не трогаем', async () => {
     const { orderId } = await makePaidOrder('again');
-    fakeCancel.mockClear();
-    fakeRefundsCreate.mockClear();
+    fake.calls.cancel = 0;
+    fake.calls.refund = 0;
 
     const first = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`);
     expect(first.status).toBe(200);
     const second = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`);
     expect(second.status).toBe(409);
     expect(second.body.error.code).toBe('CONFLICT');
-    expect(fakeCancel).toHaveBeenCalledTimes(1);
-    expect(fakeRefundsCreate).not.toHaveBeenCalled();
+    expect(fake.calls.cancel).toBe(1);
+    expect(fake.calls.refund).toBe(0);
   });
 
   it('refund заказа в RELEASING запрещён (выплата движется к продавцу)', async () => {
     const { orderId } = await makePaidOrder('releasingguard');
     await prisma.order.update({ where: { id: orderId }, data: { status: 'RELEASING' } });
-    fakeCancel.mockClear();
+    fake.calls.cancel = 0;
 
     const res = await request(app)
       .post(`/api/orders/${orderId}/refund`)
       .set('Authorization', `Bearer ${buyerToken}`);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CONFLICT');
-    expect(fakeCancel).not.toHaveBeenCalled();
+    expect(fake.calls.cancel).toBe(0);
+  });
+
+  it('refund уже завершённого (captured) платежа идёт через refund, а не cancel', async () => {
+    const { orderId } = await makePaidOrder('captured');
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    fake.setPaymentStatus(order.yookassaPaymentId as string, 'succeeded');
+    fake.calls.cancel = 0;
+    fake.calls.refund = 0;
+
+    const res = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`);
+    expect(res.status).toBe(200);
+    expect(fake.calls.cancel).toBe(0);
+    expect(fake.calls.refund).toBe(1);
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(updated.status).toBe('REFUNDED');
   });
 });

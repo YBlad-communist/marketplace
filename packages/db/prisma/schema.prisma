@@ -76,9 +76,8 @@ model User {
   banReason          String?
   rating             Float                      @default(0)
   ratingCount        Int                        @default(0)
-  stripeAccountId    String?
-  stripeOnboarded    Boolean                    @default(false)
-  googleId           String?                    @unique
+  yookassaShopId     String?
+  yookassaOnboarded  Boolean                    @default(false)
   emailVerifiedAt    DateTime?
   phoneVerifiedAt    DateTime?
   loginFailCount     Int                        @default(0)
@@ -138,7 +137,7 @@ model Listing {
   title       String
   description String
   price       Decimal           @db.Decimal(12, 2)
-  currency    String            @default("EUR")
+  currency    String            @default("RUB")
   status      ListingStatus     @default(PENDING)
   sellerId    String
   seller      User              @relation(fields: [sellerId], references: [id])
@@ -223,10 +222,9 @@ model Order {
   buyerId                  String
   buyer                    User        @relation("buyer", fields: [buyerId], references: [id])
   amount                   Decimal     @db.Decimal(12, 2)
-  currency                 String      @default("EUR")
+  currency                 String      @default("RUB")
   status                   OrderStatus @default(PENDING)
-  stripePaymentIntentId    String?
-  stripeTransferId         String?
+  yookassaPaymentId        String?
   platformFee              Decimal?    @db.Decimal(12, 2)
   releasedAt               DateTime?
   createdAt                DateTime    @default(now())

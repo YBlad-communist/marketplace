@@ -1,27 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
 import { isInfraAvailable } from './helpers.js';
+import { installYookassaFake } from './yookassa-fake.js';
 
-// Считаем ВСЕ вызовы Stripe: двойная выплата = transfers.create вызван
+// Считаем ВСЕ вызовы capture: двойная выплата = capture вызван
 // больше одного раза на один заказ.
-const fakeTransfers = vi.fn(async () => ({ id: 'tr_par_mock' }));
-vi.mock('stripe', () => {
-  class FakeStripe {
-    paymentIntents = {
-      create: vi.fn(async () => ({ id: 'pi_par_mock', client_secret: 'pi_par_secret' })),
-      retrieve: vi.fn(async () => ({ id: 'pi_par_mock', status: 'requires_capture' })),
-      capture: vi.fn(async () => ({ status: 'succeeded' })),
-      cancel: vi.fn(async () => ({})),
-    };
-    transfers = {
-      create: fakeTransfers,
-    };
-  }
-  return { __esModule: true, default: FakeStripe };
-});
+const fake = installYookassaFake({ createStatus: 'waiting_for_capture' });
 
 const app = createApp();
 
@@ -54,7 +41,7 @@ beforeAll(async () => {
   const sellerPhone = `+7${unique.toString().slice(-9)}8`;
   await request(app).post('/api/auth/register').send({ name: 'Продавец-параллель', phone: sellerPhone, password, confirmPassword: password });
   const seller = await prisma.user.findUniqueOrThrow({ where: { phone: sellerPhone } });
-  await prisma.user.update({ where: { id: seller.id }, data: { stripeAccountId: 'acct_par', stripeOnboarded: true } });
+  await prisma.user.update({ where: { id: seller.id }, data: { yookassaShopId: 'shop_par', yookassaOnboarded: true } });
   const sellerLogin = await request(app).post('/api/auth/login').send({ phone: sellerPhone, password });
   sellerToken = sellerLogin.body.data.accessToken as string;
 
@@ -78,9 +65,10 @@ afterAll(async () => {
 });
 
 describeInfra('release: параллельный вызов не даёт двойной выплаты', () => {
-  it('два одновременных release: один 200, второй 409, transfer создан ровно один раз', async () => {
+  it('два одновременных release: один 200, второй 409, capture вызван ровно один раз', async () => {
     const { orderId, listingId } = await makePaidOrder('race');
-    fakeTransfers.mockClear();
+    fake.calls.capture = 0;
+    fake.calls.capturedIds = [];
 
     const [a, b] = await Promise.all([
       request(app).post(`/api/orders/${orderId}/release`).set('Authorization', `Bearer ${buyerToken}`),
@@ -92,26 +80,28 @@ describeInfra('release: параллельный вызов не даёт дво
 
     const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(order.status).toBe('RELEASED');
-    expect(order.stripeTransferId).toBe('tr_par_mock');
+    expect(Number(order.platformFee)).toBe(2);
     const listing = await prisma.listing.findUniqueOrThrow({ where: { id: listingId } });
     expect(listing.status).toBe('SOLD');
-    expect(fakeTransfers).toHaveBeenCalledTimes(1);
+    expect(fake.calls.capture).toBe(1);
   });
 
   it('release уже завершённого (RELEASED) заказа идемпотентно отклоняется', async () => {
     const { orderId } = await makePaidOrder('again');
-    fakeTransfers.mockClear();
+    fake.calls.capture = 0;
 
     const first = await request(app).post(`/api/orders/${orderId}/release`).set('Authorization', `Bearer ${buyerToken}`);
     expect(first.status).toBe(200);
     const second = await request(app).post(`/api/orders/${orderId}/release`).set('Authorization', `Bearer ${buyerToken}`);
     expect(second.status).toBe(409);
-    expect(fakeTransfers).toHaveBeenCalledTimes(1);
+    expect(fake.calls.capture).toBe(1);
   });
 
   it('refund заказа в RELEASING запрещён (деньги движутся к продавцу)', async () => {
     const { orderId } = await makePaidOrder('refundguard');
     await prisma.order.update({ where: { id: orderId }, data: { status: 'RELEASING' } });
+    fake.calls.cancel = 0;
+    fake.calls.refund = 0;
 
     const res = await request(app)
       .post(`/api/orders/${orderId}/refund`)
@@ -120,5 +110,7 @@ describeInfra('release: параллельный вызов не даёт дво
     expect(res.body.error.code).toBe('CONFLICT');
     const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(order.status).toBe('RELEASING');
+    expect(fake.calls.cancel).toBe(0);
+    expect(fake.calls.refund).toBe(0);
   });
 });

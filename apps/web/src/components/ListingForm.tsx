@@ -106,7 +106,7 @@ export function ListingForm({ mode, initial }: Props) {
       title,
       description,
       price: Number(price),
-      currency: 'EUR',
+      currency: 'RUB',
       categoryId,
       city,
       attributes: attrsPayload,
@@ -157,7 +157,7 @@ export function ListingForm({ mode, initial }: Props) {
 
       <div className="grid gap-4 md:grid-cols-2">
         <div>
-          <label className="label">Цена (EUR) *</label>
+          <label className="label">Цена (₽) *</label>
           <input
             className="input"
             type="number"

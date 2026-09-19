@@ -1,44 +1,43 @@
-import Stripe from 'stripe';
 import { prisma } from '@marketplace/db';
+import { expiredHoldCancelIdempotencyKey } from '@marketplace/shared';
 import { env } from './config.js';
 import { logger, sendEmail } from './mailer.js';
+import {
+  cancelYookassaPayment,
+  configureYookassa,
+  getYookassaPayment,
+  yookassaConfigured,
+} from './lib/yookassa.js';
 
-let stripe: Stripe | null = null;
-
-function getStripe(): Stripe | null {
-  if (!env.STRIPE_SECRET_KEY) return null;
-  if (!stripe) {
-    stripe = new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
-  }
-  return stripe;
-}
+configureYookassa(env.YOOKASSA_SHOP_ID, env.YOOKASSA_SECRET_KEY);
 
 /**
- * Решение по статусу PaymentIntent для зависшего PAID-заказа.
- * - 'held' — холд жив (requires_capture), заказ ждёт покупателя;
- * - 'expired' — холд мёртв, деньги у Stripe освобождены, заказ надо закрывать;
+ * Решение по статусу платежа ЮKassa для зависшего PAID-заказа.
+ * - 'held'    — холд жив (waiting_for_capture), заказ ждёт покупателя;
+ * - 'expired' — холд мёртв (canceled) или деньги так и не авторизованы
+ *               (pending): ЮKassa рано или поздно отменит платёж сама,
+ *               заказ в БД не должен вечно висеть с залоченным объявлением;
  * - 'unknown' — непонятное состояние, не трогаем, только лог.
  */
-export function decideHoldOutcome(piStatus: string): 'held' | 'expired' | 'unknown' {
-  if (piStatus === 'requires_capture') return 'held';
-  if (piStatus === 'canceled' || piStatus === 'requires_payment_method') return 'expired';
+export function decideHoldOutcome(status: string): 'held' | 'expired' | 'unknown' {
+  if (status === 'waiting_for_capture') return 'held';
+  if (status === 'canceled' || status === 'pending') return 'expired';
   return 'unknown';
 }
 
 /**
  * Периодическая чистка зависших эскроу-холдов.
- * Stripe сам отменяет manual-capture авторизацию (~7 дней), а заказ в БД
- * навсегда остался бы PAID с залоченным объявлением. Находим такие заказы,
- * сверяемся со Stripe и переводим в REFUNDED + снимаем резерв.
+ * ЮKassa сама отменяет авторизации, не завершённые capture (~7 дней), а заказ
+ * в БД навсегда остался бы PAID с залоченным объявлением. Находим такие заказы,
+ * сверяемся с ЮKassa и переводим в REFUNDED + снимаем резерв.
  */
 export async function checkExpiredHoldsJob(): Promise<{ checked: number; refunded: number }> {
-  const s = getStripe();
-  if (!s) {
-    logger.warn('STRIPE_SECRET_KEY is not configured, skipping expired holds check');
+  if (!yookassaConfigured()) {
+    logger.warn('YOOKASSA_SECRET_KEY is not configured, skipping expired holds check');
     return { checked: 0, refunded: 0 };
   }
 
-  const ttlMs = Math.max(1, env.STRIPE_HOLD_TTL_DAYS) * 86400_000;
+  const ttlMs = Math.max(1, env.YOOKASSA_HOLD_TTL_DAYS) * 86400_000;
   const cutoff = new Date(Date.now() - ttlMs);
 
   const stale = await prisma.order.findMany({
@@ -48,27 +47,38 @@ export async function checkExpiredHoldsJob(): Promise<{ checked: number; refunde
     select: {
       id: true,
       listingId: true,
-      stripePaymentIntentId: true,
+      yookassaPaymentId: true,
       buyer: { select: { email: true } },
     },
   });
 
   let refunded = 0;
   for (const order of stale) {
-    if (!order.stripePaymentIntentId) continue;
-    let piStatus: string;
+    if (!order.yookassaPaymentId) continue;
+    let status: string;
     try {
-      const pi = await s.paymentIntents.retrieve(order.stripePaymentIntentId);
-      piStatus = pi.status;
+      const payment = await getYookassaPayment(order.yookassaPaymentId);
+      status = payment.status;
     } catch (err) {
-      logger.warn({ err, orderId: order.id }, 'expired holds: payment intent lookup failed, skipping');
+      logger.warn({ err, orderId: order.id }, 'expired holds: payment lookup failed, skipping');
       continue;
     }
 
-    const outcome = decideHoldOutcome(piStatus);
+    const outcome = decideHoldOutcome(status);
     if (outcome === 'held') continue;
     if (outcome === 'unknown') {
-      logger.warn({ orderId: order.id, piStatus }, 'expired holds: unexpected payment intent status');
+      logger.warn({ orderId: order.id, status }, 'expired holds: unexpected payment status');
+      continue;
+    }
+
+    if (status === 'pending') {
+      // Непомеченный как оплаченный платёж: понуждаем ЮKassa закрыть холд
+      // (ждём её статус canceled), затем финальный клейм ниже не сработает,
+      // а заказ удаляется/освобождается через следующую итерацию/вебхук.
+      await cancelYookassaPayment(
+        order.yookassaPaymentId,
+        expiredHoldCancelIdempotencyKey(order.id)
+      ).catch((err) => logger.warn({ err, orderId: order.id }, 'expired holds: cancel failed, will recheck'));
       continue;
     }
 
@@ -89,7 +99,7 @@ export async function checkExpiredHoldsJob(): Promise<{ checked: number; refunde
       data: { status: 'ACTIVE' },
     });
     refunded += 1;
-    logger.info({ orderId: order.id, piStatus }, 'expired escrow hold refunded');
+    logger.info({ orderId: order.id, status }, 'expired escrow hold refunded');
 
     if (order.buyer.email) {
       await sendEmail({
@@ -97,7 +107,7 @@ export async function checkExpiredHoldsJob(): Promise<{ checked: number; refunde
         subject: 'Холд по заказу истёк, оплата возвращена',
         template: 'order-updated',
         templateData: { orderId: order.id },
-        text: `Срок удержания оплаты по заказу истёк, холд отменён. Если товар всё ещё нужен — оформите заказ заново.`,
+        text: 'Срок удержания оплаты по заказу истёк, холд отменён. Если товар всё ещё нужен — оформите заказ заново.',
       }).catch((err) => logger.warn({ err, orderId: order.id }, 'expired hold email failed'));
     }
   }

@@ -11,8 +11,9 @@ process.env.S3_ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID ?? 'minioadmin';
 process.env.S3_SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY ?? 'minioadmin';
 process.env.RATE_LIMIT_ENABLED = 'false';
 process.env.CORS_ORIGINS = 'http://localhost:3000';
-process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ?? 'sk_test_mock';
-process.env.STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET ?? 'whsec_mock';
+process.env.YOOKASSA_SHOP_ID = process.env.YOOKASSA_SHOP_ID ?? 'shop_mock';
+process.env.YOOKASSA_SECRET_KEY = process.env.YOOKASSA_SECRET_KEY ?? 'secret_mock';
+process.env.YOOKASSA_INSECURE_WEBHOOKS = 'true';
 process.env.SMTP_HOST = process.env.SMTP_HOST ?? 'localhost';
 process.env.SMTP_PORT = String(Number(process.env.SMTP_PORT ?? 1025));
 

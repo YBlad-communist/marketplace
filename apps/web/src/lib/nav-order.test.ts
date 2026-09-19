@@ -19,7 +19,6 @@ describe('navIndex', () => {
     expect(navIndex('/listings/abc/edit')).toBe(0);
     expect(navIndex('/users/abc')).toBe(0);
     expect(navIndex('/seller/connect')).toBe(5);
-    expect(navIndex('/oauth/success')).toBe(7);
   });
 
   it('возвращает null для неизвестных маршрутов', () => {

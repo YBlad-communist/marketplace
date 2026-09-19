@@ -13,7 +13,8 @@ export interface CurrentUser {
   isBanned: boolean;
   rating: number;
   ratingCount: number;
-  stripeOnboarded: boolean;
+  yookassaShopId: string | null;
+  yookassaOnboarded: boolean;
 }
 
 interface AuthState {

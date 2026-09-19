@@ -2,7 +2,7 @@
   "name": "marketplace",
   "version": "1.0.0",
   "private": true,
-  "description": "Full-stack marketplace (Avito-like) — Next.js + Express + PostgreSQL + Redis + Stripe Connect",
+  "description": "Full-stack marketplace (Avito-like) — Next.js + Express + PostgreSQL + Redis + ЮKassa",
   "engines": {
     "node": ">=20"
   },

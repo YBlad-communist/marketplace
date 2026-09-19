@@ -14,7 +14,10 @@ export const listingCreateSchema = z.object({
   title: titleSchema,
   description: descriptionSchema,
   price: priceSchema,
-  currency: z.string().length(3).toUpperCase().default('EUR'),
+  currency: z
+    .enum(['RUB'])
+    .default('RUB')
+    .describe('Единственная поддерживаемая валюта — российский рубль'),
   categoryId: z.string().cuid(),
   city: citySchema,
   lat: z.number().min(-90).max(90).optional(),

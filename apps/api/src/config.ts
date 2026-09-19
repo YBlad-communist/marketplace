@@ -39,11 +39,14 @@ const envSchema = z.object({
   S3_PUBLIC_BASE_URL: z.string().default('http://localhost:9000/marketplace'),
   S3_MAX_IMAGE_BYTES: z.coerce.number().default(5 * 1024 * 1024),
 
-  STRIPE_SECRET_KEY: z.string().optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  STRIPE_PUBLISHABLE_KEY: z.string().optional(),
-  STRIPE_CONNECT_ONBOARDING_URL: z.string().default('http://localhost:3000/seller/connect'),
-  STRIPE_PLATFORM_FEE_BASIS_POINTS: z.coerce.number().default(200),
+  YOOKASSA_SHOP_ID: z.string().optional(),
+  YOOKASSA_SECRET_KEY: z.string().optional(),
+  YOOKASSA_PLATFORM_FEE_BASIS_POINTS: z.coerce.number().default(200),
+  // Отключить проверку IP уведомлений ЮKassa (только для разработки через туннель).
+  YOOKASSA_INSECURE_WEBHOOKS: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
 
   // Сколько прокси-хопов (nginx/Cloudflare) стоит между клиентом и API.
   // Express берёт правый (самый близкий к нам) адрес из X-Forwarded-For,
@@ -61,15 +64,12 @@ const envSchema = z.object({
   // в одном диалоге: за окно уходит не более 1 письма с агрегированным N.
   OFFLINE_EMAIL_COOLDOWN_MS: z.coerce.number().default(10 * 60_000),
 
-  // Email администратора для уведомлений о спорах/чарджбэках (опционально).
+  // Email администратора для уведомлений о спорах/возвратах (опционально).
   ADMIN_EMAIL: z.string().email().optional(),
 
-  GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_REDIRECT_URL: z.string().optional(),
-
-  TURNSTILE_SECRET_KEY: z.string().optional(),
-  TURNSTILE_ENABLED: z
+  // Я.Капча (SmartCaptcha). Поле запроса сохраняется как `captchaToken`.
+  SMARTCAPTCHA_SECRET_KEY: z.string().optional(),
+  SMARTCAPTCHA_ENABLED: z
     .string()
     .optional()
     .transform((v) => v === 'true'),
