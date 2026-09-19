@@ -7,13 +7,16 @@ import {
   errorCodes,
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
-import { requireModerator, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requireModerator, requireAdmin } from '../middleware/auth.js';
 import { approveListing, rejectListing } from '../services/moderationService.js';
 import { logSecurityEvent } from '../lib/logger.js';
 import { getRedis } from '../lib/redis.js';
 
 const router: Router = Router();
 
+// Без authenticate req.userId/req.userRole не выставлены, и requireRole
+// отдавал бы 401 каждому запросу (баг с первого коммита — админка была мертва).
+router.use(authenticate);
 router.use(requireModerator);
 
 router.get('/listings/pending', async (req, res, next) => {
@@ -94,14 +97,15 @@ router.post('/users/:id/ban', validate(adminBanSchema), async (req, res, next) =
         banReason: req.body.banned ? (req.body.reason ?? 'Нарушение правил') : null,
       },
     });
+    // Инвалидируем кэш авторизации и на бан, и на разбан: иначе забаненный
+    // до минуты ходит по API как обычный, а разбаненный ещё минуту — как забаненный.
+    const redis = getRedis();
+    await redis.del(`user:auth:${user.id}`);
     if (req.body.banned) {
-      const redis = getRedis();
-      await redis.del(`user:auth:${user.id}`);
       await prisma.refreshTokenFamily.updateMany({
         where: { userId: user.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
-      await redis.setex(`user:ban:${user.id}`, 3600, '1');
     }
     logSecurityEvent('user_banned', { userId: user.id, banned: req.body.banned, admin: req.userId });
     res.json({ data: { success: true } });

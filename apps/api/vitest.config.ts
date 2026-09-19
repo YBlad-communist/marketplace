@@ -6,5 +6,8 @@ export default defineConfig({
     setupFiles: ['./test/setup.ts'],
     testTimeout: 20000,
     hookTimeout: 20000,
+    // Интеграционные тесты создают пользователей с похожими телефонами
+    // (Date.now-генерация) в одной БД: параллельные воркеры конфликтуют.
+    fileParallelism: false,
   },
 });

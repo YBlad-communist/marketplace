@@ -96,24 +96,36 @@ router.post('/logout', async (req, res, next) => {
   }
 });
 
-router.post('/verification/request', authenticate, validate(requestVerificationSchema), async (req, res, next) => {
-  try {
-    // телефонная верификация — код отправляется через SMS.RU worker (см. apps/worker/src/smsru.ts)
-    await authService.requestPhoneVerification(req.userId!);
-    res.json({ data: { success: true } });
-  } catch (err) {
-    next(err);
+router.post(
+  '/verification/request',
+  ipRateLimit('verification:request', 60_000, 5),
+  authenticate,
+  validate(requestVerificationSchema),
+  async (req, res, next) => {
+    try {
+      // телефонная верификация — код отправляется через SMS.RU worker (см. apps/worker/src/smsru.ts)
+      await authService.requestPhoneVerification(req.userId!);
+      res.json({ data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
-router.post('/verification/verify', authenticate, validate(verifyEmailSchema), async (req, res, next) => {
-  try {
-    await authService.verifyPhone(req.userId!, req.body.code);
-    res.json({ data: { success: true } });
-  } catch (err) {
-    next(err);
+router.post(
+  '/verification/verify',
+  ipRateLimit('verification:verify', 60_000, 10),
+  authenticate,
+  validate(verifyEmailSchema),
+  async (req, res, next) => {
+    try {
+      await authService.verifyPhone(req.userId!, req.body.code);
+      res.json({ data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 router.post(
   '/password/forgot',

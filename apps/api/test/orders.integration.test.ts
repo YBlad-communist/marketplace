@@ -5,22 +5,21 @@ import { connectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
 import { isInfraAvailable } from './helpers.js';
 
-vi.mock('../src/services/paymentService.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/services/paymentService.js')>();
-  return {
-    ...actual,
-    createEscrowOrder: vi.fn(async ({ listingId, buyerId, idempotencyKey }) => ({
-      order: {
-        id: `ord-${idempotencyKey}`,
-        status: 'PENDING',
-        amount: 100,
-        currency: 'EUR',
-        listingId,
-        buyerId,
-      },
-      clientSecret: 'pi_3_secret_test',
-    })),
-  };
+// Мокаем сам Stripe-SDK, а не createEscrowOrder: сервис остаётся настоящим,
+// чтобы проверки (идемпотентность, «второй заказ на то же объявление») были честными.
+vi.mock('stripe', () => {
+  class FakeStripe {
+    paymentIntents = {
+      create: vi.fn(async () => ({ id: 'pi_3_mock', client_secret: 'pi_3_secret_test' })),
+      retrieve: vi.fn(async () => ({ id: 'pi_3_mock', client_secret: 'pi_3_secret_test' })),
+      capture: vi.fn(async () => ({ status: 'succeeded' })),
+      cancel: vi.fn(async () => ({})),
+    };
+    transfers = {
+      create: vi.fn(async () => ({ id: 'tr_1_mock' })),
+    };
+  }
+  return { __esModule: true, default: FakeStripe };
 });
 
 const app = createApp();
@@ -45,6 +44,8 @@ beforeAll(async () => {
     where: { id: seller.id },
     data: { stripeAccountId: 'acct_test', stripeOnboarded: true },
   });
+  const sellerLogin = await request(app).post('/api/auth/login').send({ phone: sellerPhone, password });
+  const sellerToken = sellerLogin.body.data.accessToken as string;
 
   const buyerPhone = `+7${Date.now().toString().slice(-9)}5`;
   await request(app).post('/api/auth/register').send({ name: 'Покупатель', phone: buyerPhone, password, confirmPassword: password });
@@ -53,7 +54,7 @@ beforeAll(async () => {
 
   const create = await request(app)
     .post('/api/listings')
-    .set('Authorization', `Bearer ${buyerToken}`)
+    .set('Authorization', `Bearer ${sellerToken}`)
     .send({ title: 'Товар для оплаты', description: 'Описание товара для проверки оплаты', price: 100, categoryId, city: 'Москва' });
   listingId = create.body.data.listing.id;
 });

@@ -15,3 +15,20 @@ process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ?? 'sk_test_mock';
 process.env.STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET ?? 'whsec_mock';
 process.env.SMTP_HOST = process.env.SMTP_HOST ?? 'localhost';
 process.env.SMTP_PORT = String(Number(process.env.SMTP_PORT ?? 1025));
+
+// Интеграционные тесты (chat/orders/listings) ожидают в БД категории
+// 'services' и 'electronics'. Обеспечиваем их идемпотентно; если БД
+// недоступна — тесты скипаются сами, здесь просто молчим.
+try {
+  const { prisma } = await import('@marketplace/db');
+  for (const slug of ['services', 'electronics']) {
+    await prisma.category.upsert({
+      where: { slug },
+      update: {},
+      create: { name: slug === 'services' ? 'Услуги' : 'Электроника', slug },
+    });
+  }
+  await prisma.$disconnect();
+} catch {
+  /* инфра недоступна — integration-наборы скипнутся */
+}

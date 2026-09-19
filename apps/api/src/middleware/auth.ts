@@ -1,14 +1,8 @@
 import { NextFunction, Request, Response } from 'express';
 import { AppError, errorCodes, USER_ROLES } from '@marketplace/shared';
 import { prisma } from '@marketplace/db';
-import {
-  isAccessTokenBlacklisted,
-  rotateRefreshToken,
-  verifyAccessToken,
-} from '../services/tokenService.js';
+import { isAccessTokenBlacklisted, verifyAccessToken } from '../services/tokenService.js';
 import { getRedis } from '../lib/redis.js';
-import { logger } from '../lib/logger.js';
-import { refreshCookieName, refreshCookieOptions } from '../lib/cookies.js';
 
 declare global {
   namespace Express {
@@ -48,7 +42,8 @@ async function loadUser(userId: string) {
   });
   if (!user) return null;
   const data = { id: user.id, role: user.role, email: user.email, isBanned: user.isBanned };
-  await redis.setex(cacheKey, 60, JSON.stringify(data));
+  // TTL 30 сек (было 60): бан/разбан применяются почти сразу, а редис не нагружаем
+  await redis.setex(cacheKey, 30, JSON.stringify(data));
   return data;
 }
 
@@ -112,33 +107,4 @@ export const requireModerator = requireRole('ADMIN', 'MODERATOR');
 
 export function isModeratorRole(role: string): boolean {
   return USER_ROLES.includes(role as (typeof USER_ROLES)[number]) && role !== 'USER';
-}
-
-/**
- * Автопродление access-токена при его близком истечении:
- * если клиент прислал refresh-токен в httpOnly cookie, а access устарел,
- * middleware выдаст новый access-токен. (упрощённая версия — без rotate)
- */
-export async function refreshAccessIfNeeded(req: Request, res: Response, next: NextFunction) {
-  try {
-    const refresh = extractTokenFromCookie(req, refreshCookieName);
-    const access = extractBearer(req);
-    if (!access && refresh) {
-      const { token, user } = await rotateRefreshToken(refresh, {
-        userAgent: req.headers['user-agent'],
-        ip: req.ip,
-      });
-      res.cookie(refreshCookieName, token, refreshCookieOptions);
-      req.userId = user.id;
-      req.userRole = user.role;
-      next();
-    } else if (access) {
-      next();
-    } else {
-      next();
-    }
-  } catch (err) {
-    logger.debug({ err }, 'refresh-if-needed skipped');
-    next();
-  }
 }

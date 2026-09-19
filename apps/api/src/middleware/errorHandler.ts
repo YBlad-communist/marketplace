@@ -30,5 +30,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   if (appError.fields) {
     (payload.error as Record<string, unknown>).fields = appError.fields;
   }
+  if (appError.details) {
+    (payload.error as Record<string, unknown>).details = appError.details;
+    if (typeof (appError.details as { retryAfterSeconds?: number }).retryAfterSeconds === 'number') {
+      res.setHeader(
+        'Retry-After',
+        String((appError.details as { retryAfterSeconds: number }).retryAfterSeconds)
+      );
+    }
+  }
   res.status(appError.statusCode).json(payload);
 }

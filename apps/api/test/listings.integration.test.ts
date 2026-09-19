@@ -56,7 +56,11 @@ describeInfra('listings (integration)', () => {
 
     const detail = await request(app).get(`/api/listings/${listingId}`);
     expect(detail.status).toBe(200);
-    expect(detail.body.data.listing.viewsCount).toBeGreaterThanOrEqual(1);
+    expect(typeof detail.body.data.listing.viewsCount).toBe('number');
+    // Счётчик инкрементится после ответа (защита от накрутки по ip/user),
+    // поэтому актуальное значение возвращается со второго запроса.
+    const detailAgain = await request(app).get(`/api/listings/${listingId}`);
+    expect(detailAgain.body.data.listing.viewsCount).toBeGreaterThanOrEqual(1);
   });
 
   it('allows only owner to edit', async () => {
@@ -72,14 +76,15 @@ describeInfra('listings (integration)', () => {
       });
     const listingId = create.body.data.listing.id;
 
+    const strangerPhone = `+7${Date.now().toString().slice(-9)}`;
     await request(app).post('/api/auth/register').send({
       name: 'Чужой',
-      phone: `+7${Date.now().toString().slice(-9)}`,
+      phone: strangerPhone,
       password,
       confirmPassword: password,
     });
     const strangerLogin = await request(app).post('/api/auth/login').send({
-      phone: `+7${Date.now().toString().slice(-9)}`,
+      phone: strangerPhone,
       password,
     });
 

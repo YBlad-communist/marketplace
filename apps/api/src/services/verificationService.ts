@@ -6,6 +6,70 @@ import { getRedis } from '../lib/redis.js';
 export const VERIFY_CODE_TTL_MS = 10 * 60_000;
 export const VERIFY_MAX_ATTEMPTS = 5;
 
+// Лимиты на отправку OTP (SMS/почта): защита от SMS-бомбинга и сжигания бюджета.
+export const OTP_MIN_INTERVAL_MS = 60_000;
+export const OTP_HOUR_MS = 3_600_000;
+export const OTP_HOUR_MAX = 5;
+export const OTP_DAY_MS = 86_400_000;
+export const OTP_DAY_MAX = 10;
+
+export interface OtpBucket {
+  key: string;
+  windowMs: number;
+  max: number;
+}
+
+/**
+ * Вёдра лимита отправки кода:
+ * - не чаще 1 запроса в 60 сек на целевой номер/email (otp:send:{target});
+ * - не больше 5 в час на цель;
+ * - не больше 10 в сутки на userId (otp:send:user:{userId}).
+ */
+export function otpBuckets(target: string, userId?: string): OtpBucket[] {
+  const buckets: OtpBucket[] = [
+    { key: `otp:send:${target}`, windowMs: OTP_MIN_INTERVAL_MS, max: 1 },
+    { key: `otp:send:${target}`, windowMs: OTP_HOUR_MS, max: OTP_HOUR_MAX },
+  ];
+  if (userId) {
+    buckets.push({ key: `otp:send:user:${userId}`, windowMs: OTP_DAY_MS, max: OTP_DAY_MAX });
+  }
+  return buckets;
+}
+
+/** Сколько мс ждать до конца окна, если count превысило max ведра (иначе 0). */
+export function otpBlockedRetryMs(bucket: OtpBucket, now: number, count: number): number {
+  if (count <= bucket.max) return 0;
+  const windowStart = Math.floor(now / bucket.windowMs) * bucket.windowMs;
+  return Math.max(1000, windowStart + bucket.windowMs - now);
+}
+
+export async function assertOtpSendAllowed(target: string, userId?: string): Promise<void> {
+  const redis = getRedis();
+  const now = Date.now();
+  const buckets = otpBuckets(target, userId);
+
+  let retryAfterMs = 0;
+  for (const bucket of buckets) {
+    const fullKey = `${bucket.key}:${Math.floor(now / bucket.windowMs) * bucket.windowMs}`;
+    const count = await redis.incr(fullKey);
+    if (count === 1) {
+      await redis.expire(fullKey, Math.ceil(bucket.windowMs / 1000)).catch(() => undefined);
+    }
+    retryAfterMs = Math.max(retryAfterMs, otpBlockedRetryMs(bucket, now, count));
+  }
+
+  if (retryAfterMs > 0) {
+    const retryAfterSeconds = Math.ceil(retryAfterMs / 1000);
+    throw new AppError(
+      errorCodes.RATE_LIMITED,
+      `Слишком много запросов кода. Повторите через ${retryAfterSeconds} сек.`,
+      429,
+      undefined,
+      { retryAfterSeconds }
+    );
+  }
+}
+
 export function generateCode(): string {
   return crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
 }

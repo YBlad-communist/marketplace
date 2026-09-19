@@ -10,7 +10,7 @@ import {
   rotateRefreshToken,
   signAccessToken,
 } from './tokenService.js';
-import { createVerificationCode, verifyCode } from './verificationService.js';
+import { createVerificationCode, verifyCode, assertOtpSendAllowed } from './verificationService.js';
 import { enqueueSms } from './notificationService.js';
 
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -137,12 +137,9 @@ export async function requestPhoneVerification(userId: string): Promise<void> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
   if (user.phoneVerifiedAt || !user.phone) return;
-  const redis = getRedis();
-  const attempts = await redis.incr(`verify:req:${userId}`);
-  await redis.expire(`verify:req:${userId}`, 300);
-  if (attempts > 3) {
-    throw new AppError(errorCodes.RATE_LIMITED, 'Слишком много запросов кода', 429);
-  }
+  // Разные вёдра по номеру и по пользователю: нельзя бомбить чужой номер
+  // своей сессией и нельзя сжигать бюджет SMS частой «повторной отправкой».
+  await assertOtpSendAllowed(user.phone, userId);
   const code = await createVerificationCode({
     userId,
     purpose: 'PHONE_VERIFY',
@@ -164,6 +161,9 @@ export async function verifyPhone(userId: string, code: string): Promise<void> {
 }
 
 export async function requestPasswordReset(phone: string): Promise<void> {
+  // Лимит по цели (номер) работает и для несуществующих аккаунтов: бомбить
+  // чужой номер через /password/forgot нельзя, и не палим existence-статус.
+  await assertOtpSendAllowed(phone);
   const user = await prisma.user.findUnique({ where: { phone } });
   if (user) {
     const code = await createVerificationCode({

@@ -27,12 +27,13 @@ beforeAll(async () => {
   const buyer = await request(app).post('/api/auth/login').send({ phone, password });
   buyerToken = buyer.body.data.accessToken;
 
+  const sellerPhone = `+7${Date.now().toString().slice(-9)}`;
   await request(app)
     .post('/api/auth/register')
-    .send({ name: 'Продавец', phone: `+7${Date.now().toString().slice(-9)}`, password, confirmPassword: password });
+    .send({ name: 'Продавец', phone: sellerPhone, password, confirmPassword: password });
   const seller = await request(app)
     .post('/api/auth/login')
-    .send({ phone: `+7${Date.now().toString().slice(-9)}`, password });
+    .send({ phone: sellerPhone, password });
   sellerToken = seller.body.data.accessToken;
 
   const create = await request(app)
@@ -76,12 +77,13 @@ describeInfra('chat (integration)', () => {
       .send({ listingId });
     const conversationId = conv.body.data.conversation.id;
 
+    const strangerPhone = `+7${Date.now().toString().slice(-9)}`;
     await request(app)
       .post('/api/auth/register')
-      .send({ name: 'Хакер', phone: `+7${Date.now().toString().slice(-9)}`, password, confirmPassword: password });
+      .send({ name: 'Хакер', phone: strangerPhone, password, confirmPassword: password });
     const strangerLogin = await request(app)
       .post('/api/auth/login')
-      .send({ phone: `+7${Date.now().toString().slice(-9)}`, password });
+      .send({ phone: strangerPhone, password });
     const res = await request(app)
       .get(`/api/conversations/${conversationId}/messages`)
       .set('Authorization', `Bearer ${strangerLogin.body.data.accessToken}`);
