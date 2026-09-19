@@ -3,12 +3,9 @@ import { prisma } from '@marketplace/db';
 import { reviewCreateSchema, reviewQuerySchema, AppError, errorCodes } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
+import { env } from '../config.js';
 
 const router: Router = Router();
-
-// Минимальная сумма завершённого заказа, по которому можно оставить отзыв.
-// Защита от накрутки рейтинга «символическими» сделками на копейки.
-const MIN_REVIEW_ORDER_TOTAL = 1;
 
 router.post('/', authenticate, validate(reviewCreateSchema), async (req, res, next) => {
   try {
@@ -27,11 +24,12 @@ router.post('/', authenticate, validate(reviewCreateSchema), async (req, res, ne
     // Отзыв пишется только после фактически завершённой сделки (RELEASED):
     // REFUNDED/возврат означает, что товар покупателю не передан, и его оценка
     // лишь засоряет рейтинг. Оценка «взаимной» рекламы с копеечными сделками
-    // тоже отсекается минимальной суммой заказа.
+    // тоже отсекается минимальной суммой заказа (порог из env — меняется без
+    // пересборки API).
     if (order.status !== 'RELEASED') {
       throw new AppError(errorCodes.CONFLICT, 'Отзыв доступен только после успешно завершённой сделки', 409);
     }
-    if (order.amount.toNumber() < MIN_REVIEW_ORDER_TOTAL) {
+    if (order.amount.toNumber() < env.REVIEW_MIN_ORDER_TOTAL) {
       throw new AppError(errorCodes.VALIDATION, 'Сумма заказа слишком мала для отзыва', 400);
     }
     // Контрагента берём из заказа, а не из тела запроса: иначе один заказ
@@ -41,18 +39,37 @@ router.post('/', authenticate, validate(reviewCreateSchema), async (req, res, ne
       throw new AppError(errorCodes.VALIDATION, 'Отзыв можно оставить только контрагенту по сделке', 400);
     }
 
-    const review = await prisma.review.create({
-      data: { authorId: req.userId!, revieweeId: counterpartyId, orderId, rating, text },
+    // Анти-накрутка: не больше REVIEW_PAIR_LIMIT отзывов между одной парой
+    // за REVIEW_PAIR_WINDOW_DAYS дней (взаимные «обмены рейтингом» гаснут).
+    const pairCutoff = new Date(Date.now() - env.REVIEW_PAIR_WINDOW_DAYS * 86_400_000);
+    const pairCount = await prisma.review.count({
+      where: {
+        authorId: req.userId!,
+        revieweeId: counterpartyId,
+        createdAt: { gte: pairCutoff },
+      },
     });
+    if (pairCount >= env.REVIEW_PAIR_LIMIT) {
+      throw new AppError(errorCodes.CONFLICT, 'Вы уже оставили отзыв этому пользователю в текущем периоде', 409);
+    }
 
-    const agg = await prisma.review.aggregate({
-      where: { revieweeId },
-      _avg: { rating: true },
-      _count: true,
-    });
-    await prisma.user.update({
-      where: { id: revieweeId },
-      data: { rating: agg._avg.rating ?? 0, ratingCount: agg._count },
+    // Создание + пересчёт рейтинга атомарны: агрегат видит только что
+    // созданный отзыв, и между create и aggregate никто не «пролез»
+    // с конкурентным отзывом (иначе рейтинг разъезжался с реальностью).
+    const review = await prisma.$transaction(async (tx) => {
+      const created = await tx.review.create({
+        data: { authorId: req.userId!, revieweeId: counterpartyId, orderId, rating, text },
+      });
+      const agg = await tx.review.aggregate({
+        where: { revieweeId: counterpartyId },
+        _avg: { rating: true },
+        _count: true,
+      });
+      await tx.user.update({
+        where: { id: counterpartyId },
+        data: { rating: agg._avg.rating ?? 0, ratingCount: agg._count },
+      });
+      return created;
     });
 
     res.status(201).json({ data: { review } });

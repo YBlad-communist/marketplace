@@ -34,10 +34,12 @@ const password = 'Strong123!';
 let sellerToken = '';
 let sellerId = '';
 let buyerToken = '';
+let buyerId = '';
 let categoryId = '';
 let normalListingId = '';
 let smallListingId = '';
 let refundListingId = '';
+let pairListingId = '';
 
 async function registerAndLogin(name: string, phone: string) {
   await request(app).post('/api/auth/register').send({ name, phone, password, confirmPassword: password });
@@ -80,6 +82,7 @@ beforeAll(async () => {
 
   const buyerPhone = `+7${Date.now().toString().slice(-9)}2`;
   buyerToken = await registerAndLogin('Покупатель отзывов', buyerPhone);
+  buyerId = (await prisma.user.findUniqueOrThrow({ where: { phone: buyerPhone } })).id;
 
   const createListing = async (title: string, price: number) => {
     const res = await request(app)
@@ -93,6 +96,7 @@ beforeAll(async () => {
   normalListingId = await createListing('Товар для честного отзыва', 100);
   smallListingId = await createListing('Копеечный товар', 0.5);
   refundListingId = await createListing('Товар с возвратом', 100);
+  pairListingId = await createListing('Товар для пары-лимита', 100);
 });
 
 afterAll(async () => {
@@ -144,5 +148,24 @@ describeInfra('reviews (integration): целостность рейтинга', 
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CONFLICT');
+  });
+
+  it('анти-накрутка: второй отзыв той же пары за окно -> 409', async () => {
+    // Сначала по этой паре уже есть один успешный отзыв (первый тест):
+    // REVIEW_PAIR_LIMIT=1, поэтому новая сделка той же пары отклоняется.
+    const orderId = await createOrderAndPay(pairListingId, 'pair');
+    await releaseOrder(orderId);
+
+    const res = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ revieweeId: sellerId, orderId, rating: 4, text: 'Ещё одна сделка пары' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CONFLICT');
+    const pairReviews = await prisma.review.count({
+      where: { authorId: buyerId, revieweeId: sellerId },
+    });
+    expect(pairReviews).toBeGreaterThanOrEqual(1);
   });
 });

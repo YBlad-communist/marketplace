@@ -95,7 +95,7 @@ export interface OrderDto {
   buyerId: string;
   amount: number;
   currency: string;
-  status: 'PENDING' | 'PAID' | 'RELEASED' | 'REFUNDED' | 'DISPUTED';
+  status: 'PENDING' | 'PAID' | 'RELEASING' | 'RELEASED' | 'REFUNDED' | 'DISPUTED';
   createdAt: string;
   listing?: ListingDto;
   buyer?: { id: string; name: string };

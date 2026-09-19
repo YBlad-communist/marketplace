@@ -4,7 +4,7 @@ import { createApp } from '../src/app.js';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { isInfraAvailable } from './helpers.js';
-import { createRefreshToken, revokeAllUserSessions, signAccessToken } from '../src/services/tokenService.js';
+import { createRefreshToken, revokeAllUserSessions, revokeSessionFamily, signAccessToken } from '../src/services/tokenService.js';
 import { isFamilyRevoked } from '../src/services/tokenService.js';
 
 const app = createApp();
@@ -47,6 +47,42 @@ afterAll(async () => {
 });
 
 describeInfra('изоляция: «операция над A не трогает B»', () => {
+  it('revokeSessionFamily отзывает только свою семью, не семью B', async () => {
+    const aToken = await createRefreshToken(userIdA, { userAgent: 'UA-A2', ip: '11.11.11.11' });
+    const bToken = await createRefreshToken(userIdB, { userAgent: 'UA-B2', ip: '22.22.22.22' });
+
+    await revokeSessionFamily(userIdA, aToken.familyId);
+
+    expect(await isFamilyRevoked(aToken.familyId)).toBe(true);
+    expect(await isFamilyRevoked(bToken.familyId)).toBe(false);
+    const bRows = await prisma.refreshTokenFamily.findMany({
+      where: { userId: userIdB, revokedAt: null },
+    });
+    expect(bRows.some((r) => r.familyId === bToken.familyId)).toBe(true);
+  });
+
+  it('revokeSessionFamily с чужим (не-своим) familyId не отзывает ничего', async () => {
+    const a1 = await createRefreshToken(userIdA, { ip: '12.12.12.12' });
+    const bToken = await createRefreshToken(userIdB, { ip: '23.23.23.23' });
+
+    // B пытается отозвать семью A, подставив её familyId с токеном B:
+    // револьвер требует соответствия userId+familyId, иначе — пустое действие.
+    const res = await revokeSessionFamily(userIdB, a1.familyId);
+    expect(res).toBe(false);
+    expect(await isFamilyRevoked(a1.familyId)).toBe(false);
+    expect(await isFamilyRevoked(bToken.familyId)).toBe(false);
+  });
+
+  it('revokeSessionFamily не задевает смежную семью того же пользователя', async () => {
+    const a1 = await createRefreshToken(userIdA, { ip: '12.12.12.12' });
+    const a2 = await createRefreshToken(userIdA, { ip: '13.13.13.13' });
+    expect(a1.familyId).not.toBe(a2.familyId);
+
+    await revokeSessionFamily(userIdA, a1.familyId);
+    expect(await isFamilyRevoked(a1.familyId)).toBe(true);
+    expect(await isFamilyRevoked(a2.familyId)).toBe(false);
+  });
+
   it('revokeAllUserSessions отзывает только сессии своего пользователя', async () => {
     const aToken = await createRefreshToken(userIdA, { userAgent: 'UA-A', ip: '1.1.1.1' });
     const bToken = await createRefreshToken(userIdB, { userAgent: 'UA-B', ip: '2.2.2.2' });

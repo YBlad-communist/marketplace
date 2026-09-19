@@ -5,6 +5,7 @@ export const QUEUES = {
   MODERATION: 'moderation',
   NOTIFICATIONS: 'notifications',
   MAINTENANCE: 'maintenance',
+  S3: 's3',
 } as const;
 
 export const EMAIL_JOBS = {
@@ -35,4 +36,10 @@ export const MAINTENANCE_JOBS = {
   CLEANUP_TOKENS: 'cleanup-tokens',
   CLEANUP_EXPIRED: 'cleanup-expired',
   CHECK_EXPIRED_HOLDS: 'check-expired-holds',
+  RECOVER_RELEASING: 'recover-stuck-releasing',
+  SEND_OFFLINE_DIGEST: 'send-offline-digest',
+} as const;
+
+export const S3_JOBS = {
+  DELETE_OBJECT: 'delete-object',
 } as const;

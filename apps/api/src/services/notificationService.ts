@@ -4,6 +4,7 @@ import {
   MAINTENANCE_JOBS,
   NOTIFICATION_JOBS,
   QUEUES,
+  S3_JOBS,
   SMS_JOBS,
 } from '@marketplace/shared';
 import { getQueue } from '../queues/index.js';
@@ -56,4 +57,28 @@ export async function enqueueExpiredHoldsCheck(): Promise<void> {
     attempts: 3,
     backoff: { type: 'exponential', delay: 60_000 },
   });
+}
+
+export async function enqueueReleasingRecovery(): Promise<void> {
+  await getQueue(QUEUES.MAINTENANCE).add(MAINTENANCE_JOBS.RECOVER_RELEASING, {}, {
+    repeat: { every: 15 * 60_000 },
+    jobId: 'releasing-recovery-repeat',
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 60_000 },
+  });
+}
+
+/**
+ * Удаление объектов из S3 в фоне: ретраи BullMQ есть из коробки, поэтому
+ * удаление переживает временные падения S3/MinIO, а ответ API не зависит от
+ * работы хранилища (иначе после prisma.delete объекты оставались бы сиротами).
+ */
+export async function enqueueS3Delete(keys: string[]): Promise<void> {
+  const unique = [...new Set(keys)];
+  if (unique.length === 0) return;
+  await getQueue(QUEUES.S3).add(
+    S3_JOBS.DELETE_OBJECT,
+    { keys: unique },
+    { attempts: 5, backoff: { type: 'exponential', delay: 30_000 } }
+  );
 }

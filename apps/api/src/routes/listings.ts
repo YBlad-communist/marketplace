@@ -15,6 +15,7 @@ import { rateLimit } from '../middleware/rateLimit.js';
 import { requireTurnstile } from '../middleware/turnstile.js';
 import { createPresignedUpload, deleteObject, verifyImageObject } from '../lib/s3.js';
 import { processImage } from '../services/imageService.js';
+import { enqueueS3Delete } from '../services/notificationService.js';
 import { getRedis } from '../lib/redis.js';
 import {
   getListingById,
@@ -24,6 +25,40 @@ import { moderateListingContent } from '../services/moderationService.js';
 import { logSecurityEvent } from '../lib/logger.js';
 
 const router: Router = Router();
+
+/** Заказы, из-за которых объявление нельзя редактировать/удалять */
+const LOCKED_ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'DISPUTED'] as const;
+
+async function assertNoActiveOrder(listingId: string, action: string): Promise<void> {
+  const active = await prisma.order.findFirst({
+    where: { listingId, status: { in: [...LOCKED_ORDER_STATUSES] } },
+    select: { id: true, status: true },
+  });
+  if (active) {
+    throw new AppError(
+      errorCodes.CONFLICT,
+      `Нельзя ${action}: по объявлению есть активный заказ ${active.id.slice(0, 8)} (статус ${active.status})`,
+      409
+    );
+  }
+}
+
+/**
+ * Удаление объявления блокируется ЛЮБОЙ историей заказов: Order.listingId
+ * связан RESTRICT-FK, и даже закрытые (REFUNDED/RELEASED) заказы нельзя
+ * «стереть» вместе с объявлением — иначе теряются следы эскроу-операций.
+ * Возвращаем понятный 409, а не «плавающий» 500 от Postgres.
+ */
+async function assertNoOrderHistory(listingId: string): Promise<void> {
+  const count = await prisma.order.count({ where: { listingId } });
+  if (count > 0) {
+    throw new AppError(
+      errorCodes.CONFLICT,
+      'Нельзя удалить объявление: по нему есть история заказов',
+      409
+    );
+  }
+}
 
 async function assertOwnerOrModerator(listingId: string, userId: string, role: string) {
   const listing = await prisma.listing.findUnique({
@@ -172,6 +207,13 @@ router.patch(
       const data: Record<string, unknown> = { ...req.body };
       delete data.imageKeys;
 
+      // Цена и статус участвуют в исполнении активных заказов (эскроу считает
+      // fee от price, статус RESERVED предотвращает повторные покупки):
+      // менять их, пока висит заказ, нельзя — 409, а не тихий разъезд данных.
+      if (data.price !== undefined || data.status !== undefined) {
+        await assertNoActiveOrder(listing.id, 'изменить цену или статус');
+      }
+
       const updated = await prisma.listing.update({
         where: { id: listing.id },
         data: data as never,
@@ -192,9 +234,17 @@ router.delete('/:id', authenticate, async (req, res, next) => {
     if (!isOwner && req.userRole !== 'ADMIN') {
       throw new AppError(errorCodes.FORBIDDEN, 'Удалять может только владелец', 403);
     }
+    // Явная проверка до удаления: любой заказ (активный или закрытый) блочит
+    // удаление объявления из-за RESTRICT-FK. Без неё Postgres отдал бы 23001
+    // -> 500 с нечитаемым текстом (см. toAppError как страховку).
+    await assertNoOrderHistory(listing.id);
     const images = await prisma.listingImage.findMany({ where: { listingId: listing.id }, select: { key: true } });
     await prisma.listing.delete({ where: { id: listing.id } });
-    await Promise.all(images.map((i) => deleteObject(i.key)));
+    // Файлы из корзины убирает фоновая джоба S3 с ретраями — если MinIO упал,
+    // объекты не остаются сиротами, а ответ API не зависит от хранилища.
+    await enqueueS3Delete(images.map((i) => i.key)).catch(() => {
+      logSecurityEvent('s3_delete_enqueue_failed', { listingId: listing.id });
+    });
     res.json({ data: { success: true } });
   } catch (err) {
     next(err);

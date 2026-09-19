@@ -11,6 +11,7 @@ import { cn, formatDateTime, formatPrice } from '@/lib/format';
 const STATUS_LABEL: Record<OrderDto['status'], string> = {
   PENDING: 'Ожидает оплаты',
   PAID: 'Оплачен (эскроу)',
+  RELEASING: 'Выплата',
   RELEASED: 'Завершён',
   REFUNDED: 'Возврат',
   DISPUTED: 'Спор',
@@ -55,7 +56,7 @@ function OrderRow({
         className={cn(
           order.status === 'RELEASED' && 'badge-green',
           order.status === 'REFUNDED' && 'badge-red',
-          order.status === 'PENDING' && 'badge-gray',
+          (order.status === 'PENDING' || order.status === 'RELEASING') && 'badge-gray',
           (order.status === 'PAID' || order.status === 'DISPUTED') && 'badge-amber'
         )}
       >

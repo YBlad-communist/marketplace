@@ -45,6 +45,22 @@ const envSchema = z.object({
   STRIPE_CONNECT_ONBOARDING_URL: z.string().default('http://localhost:3000/seller/connect'),
   STRIPE_PLATFORM_FEE_BASIS_POINTS: z.coerce.number().default(200),
 
+  // Сколько прокси-хопов (nginx/Cloudflare) стоит между клиентом и API.
+  // Express берёт правый (самый близкий к нам) адрес из X-Forwarded-For,
+  // а левые, подделываемые клиентом, игнорирует. Число, а не true: иначе
+  // rate limit обходится подменой заголовка.
+  TRUST_PROXY_HOPS: z.coerce.number().default(1),
+
+  // Минимальная сумма завершённого заказа для отзыва (анти-накрутка).
+  REVIEW_MIN_ORDER_TOTAL: z.coerce.number().default(100),
+  // Не больше N отзывов между одной парой пользователей за период (дни).
+  REVIEW_PAIR_LIMIT: z.coerce.number().default(1),
+  REVIEW_PAIR_WINDOW_DAYS: z.coerce.number().default(30),
+
+  // Окно (мс) между дайджест-письмами о новых сообщениях одному получателю
+  // в одном диалоге: за окно уходит не более 1 письма с агрегированным N.
+  OFFLINE_EMAIL_COOLDOWN_MS: z.coerce.number().default(10 * 60_000),
+
   // Email администратора для уведомлений о спорах/чарджбэках (опционально).
   ADMIN_EMAIL: z.string().email().optional(),
 

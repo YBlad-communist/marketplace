@@ -3,16 +3,16 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import http from 'node:http';
 import jwt from 'jsonwebtoken';
 import { prisma } from '@marketplace/db';
+import { AppError, MAINTENANCE_JOBS, QUEUES } from '@marketplace/shared';
 import { env } from '../config.js';
-import { getRedis } from '../lib/redis.js';
+import { getRedis } from './redis.js';
+import { getQueue } from '../queues/index.js';
 import { isAccessTokenBlacklisted } from '../services/tokenService.js';
 import {
   assertParticipant,
   createMessage,
   markRead,
 } from '../services/conversationService.js';
-import { enqueueEmail } from '../services/notificationService.js';
-import { AppError } from '@marketplace/shared';
 
 let io: Server | null = null;
 
@@ -53,9 +53,9 @@ export function initSocket(httpServer: http.Server): Server {
 
   io.on('connection', async (socket) => {
     const userId = socket.data.userId as string;
-    const redis = getRedis();
-    await redis.set(`ws:user:${userId}`, '1', 'EX', 3600);
-    await redis.sadd('ws:online', userId);
+    // Счётчик подключений: несколько вкладок/устройств — один и тот же онлайн.
+    // Снимаем с ws:online только на ПОСЛЕДНЕМ закрытии (декремент до нуля).
+    await markConnected(userId);
     // Персональная комната для уведомлений (message:new вне room:*).
     await socket.join(`user:${userId}`);
 
@@ -86,9 +86,9 @@ export function initSocket(httpServer: http.Server): Server {
         const otherIds = participants.filter((p) => p !== userId);
         for (const otherId of otherIds) {
           socket.to(`user:${otherId}`).emit('message:new', message);
-          const online = await redis.sismember('ws:online', otherId);
+          const online = await isOnline(otherId);
           if (!online) {
-            await enqueueOfflineNotification(otherId, payload.conversationId, text);
+            await scheduleOfflineDigest(otherId, payload.conversationId);
           }
         }
         cb?.({ ok: true, message });
@@ -122,7 +122,7 @@ export function initSocket(httpServer: http.Server): Server {
     });
 
     socket.on('disconnect', async () => {
-      await redis.srem('ws:online', userId);
+      await markDisconnected(userId);
     });
   });
 
@@ -142,21 +142,68 @@ async function participantsOf(conversationId: string): Promise<string[]> {
   return conv?.participants.map((p) => p.userId) ?? [];
 }
 
-async function enqueueOfflineNotification(
-  userId: string,
-  conversationId: string,
-  preview: string
-): Promise<void> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { email: true, name: true },
-  });
-  if (!user || !user.email) return;
-  await enqueueEmail({
-    to: user.email,
-    subject: 'Новое сообщение в Marketplace',
-    template: 'new-message',
-    templateData: { name: user.name, preview: preview.slice(0, 120) },
-    text: `У вас новое сообщение: ${preview.slice(0, 120)}`,
-  });
+const presenceKey = (userId: string) => `ws:presence:${userId}`;
+// TTL предохранитель: если процесс упал без disconnect, счётчик не «протекает»
+// навсегда, а доживает до TTL и сам сходит на нет.
+const PRESENCE_TTL_SECONDS = 43_200;
+
+/** Новая вкладка/устройство пользователя подключились. */
+async function markConnected(userId: string): Promise<void> {
+  const redis = getRedis();
+  const count = await redis.incr(presenceKey(userId));
+  await redis.expire(presenceKey(userId), PRESENCE_TTL_SECONDS);
+  await redis.set(`ws:user:${userId}`, String(count), 'EX', 3600);
+  await redis.sadd('ws:online', userId);
+}
+
+/** Вкладка/устройство закрылись. Онлайн снимается только на последнем. */
+async function markDisconnected(userId: string): Promise<void> {
+  const redis = getRedis();
+  const count = await redis.decr(presenceKey(userId));
+  if (count <= 0) {
+    await redis.srem('ws:online', userId);
+    await redis.del(presenceKey(userId));
+  }
+}
+
+/** Пользователь онлайн? Считаем по наличию счётчика, а не по ws:online. */
+async function isOnline(userId: string): Promise<boolean> {
+  const redis = getRedis();
+  return (await redis.exists(presenceKey(userId))) === 1;
+}
+
+const digestCountKey = (userId: string, conversationId: string) => `offline:msgcount:${userId}:${conversationId}`;
+const digestGateKey = (userId: string, conversationId: string) => `offline:gate:${userId}:${conversationId}`;
+
+/**
+ * Офлайн-дайджест: не письмо на каждое сообщение, а одно письмо на
+ * (получатель, диалог) за окно OFFLINE_EMAIL_COOLDOWN_MS с агрегированным N.
+ *
+ * Gate-ключ с TTL = окно гарантирует «максимум 1 письмо за окно», счётчик
+ * накапливает сообщения, а отложенная BullMQ-джоба (jobId с дедупликацией)
+ * забирает счётчик через GETDEL и шлёт «у вас N новых сообщений».
+ */
+async function scheduleOfflineDigest(userId: string, conversationId: string): Promise<void> {
+  const redis = getRedis();
+  await redis.incr(digestCountKey(userId, conversationId));
+  const gate = await redis.set(
+    digestGateKey(userId, conversationId),
+    '1',
+    'EX',
+    Math.max(1, Math.ceil(env.OFFLINE_EMAIL_COOLDOWN_MS / 1000)),
+    'NX'
+  );
+  if (gate !== 'OK') return; // в этом окне джоба уже запланирована
+
+  await getQueue(QUEUES.MAINTENANCE).add(
+    MAINTENANCE_JOBS.SEND_OFFLINE_DIGEST,
+    { receiverId: userId, conversationId },
+    {
+      jobId: `offline-digest-${userId}-${conversationId}`,
+      delay: env.OFFLINE_EMAIL_COOLDOWN_MS,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 30_000 },
+      removeOnComplete: true,
+    }
+  );
 }

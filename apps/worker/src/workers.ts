@@ -6,6 +6,7 @@ import {
   MODERATION_JOBS,
   NOTIFICATION_JOBS,
   QUEUES,
+  S3_JOBS,
   SMS_JOBS,
 } from '@marketplace/shared';
 import { env } from './config.js';
@@ -14,9 +15,12 @@ import { sendEmail } from './mailer.js';
 import { sendSms } from './smsru.js';
 import { cleanupExpiredTokens } from './cleanup.js';
 import { checkExpiredHoldsJob } from './expiredHolds.js';
+import { recoverStuckReleasingOrders } from './releasingRecovery.js';
+import { sendOfflineDigest } from './offlineDigest.js';
 import { processImageJob } from './imageJob.js';
 import { moderateListingJob } from './moderationJob.js';
 import { savedSearchNotificationJob } from './notificationJob.js';
+import { deleteObjectsJob } from './s3Delete.js';
 
 function connection() {
   return { url: env.REDIS_URL };
@@ -124,11 +128,32 @@ export function createWorkers(): Worker[] {
         } else if (job.name === MAINTENANCE_JOBS.CHECK_EXPIRED_HOLDS) {
           const result = await checkExpiredHoldsJob();
           logger.info({ jobName: job.name, ...result }, 'expired holds checked');
+        } else if (job.name === MAINTENANCE_JOBS.RECOVER_RELEASING) {
+          const result = await recoverStuckReleasingOrders();
+          logger.info({ jobName: job.name, ...result }, 'stuck releasing orders recovered');
+        } else if (job.name === MAINTENANCE_JOBS.SEND_OFFLINE_DIGEST) {
+          const result = await sendOfflineDigest(job.data as { receiverId?: unknown; conversationId?: unknown });
+          logger.info({ jobName: job.name, ...result }, 'offline digest sent');
         } else {
           throw new Error(`unknown maintenance job: ${job.name}`);
         }
       },
       { connection: connection(), concurrency: 1 }
+    )
+  );
+
+  workers.push(
+    new Worker(
+      QUEUES.S3,
+      async (job) => {
+        if (job.name === S3_JOBS.DELETE_OBJECT) {
+          const result = await deleteObjectsJob(job.data as { keys?: unknown });
+          logger.info({ jobId: job.id, ...result }, 's3 objects deleted');
+        } else {
+          throw new Error(`unknown s3 job: ${job.name}`);
+        }
+      },
+      { connection: connection(), concurrency: 3 }
     )
   );
 

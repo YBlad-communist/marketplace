@@ -12,12 +12,30 @@ export interface RateLimitOptions {
   respond?: boolean;
   /** логировать ли превышение */
   log?: boolean;
+  /** форсировать ли ключ по IP, даже если запрос авторизован */
+  ipOnly?: boolean;
+  /** форсировать ли ключ по userId (требует authenticate до вызова) */
+  userOnly?: boolean;
 }
 
+/** Базовый ключ ведра: IP (или userId, если он известен и ipOnly не задан). */
 export function keyFor(req: Request, extra?: string): string {
   const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
   const userId = (req as Request & { userId?: string }).userId;
   return userId ? `rl:${extra ?? ''}:${userId}` : `rl:${extra ?? ''}:ip:${ip}`;
+}
+
+/** Ключ строго по IP — имя функции обещает то, что она делает. */
+export function ipKeyFor(req: Request, extra?: string): string {
+  const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+  return `rl:${extra ?? ''}:ip:${ip}`;
+}
+
+/** Ключ строго по userId (используется ПОСЛЕ authenticate). */
+export function userKeyFor(req: Request, extra?: string): string {
+  const userId = (req as Request & { userId?: string }).userId;
+  if (!userId) throw new Error('userRateLimit требует authenticate перед вызовом');
+  return `rl:${extra ?? ''}:user:${userId}`;
 }
 
 export async function checkRateLimit(
@@ -42,7 +60,11 @@ export function rateLimit(opts: RateLimitOptions) {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!env.RATE_LIMIT_ENABLED) return next();
     try {
-      const redisKey = keyFor(req, opts.key);
+      const redisKey = opts.userOnly
+        ? userKeyFor(req, opts.key)
+        : opts.ipOnly
+          ? ipKeyFor(req, opts.key)
+          : keyFor(req, opts.key);
       const { allowed, remaining } = await checkRateLimit(redisKey, opts.windowMs, opts.max);
       res.setHeader('X-RateLimit-Remaining', String(remaining));
       if (!allowed) {
@@ -58,12 +80,22 @@ export function rateLimit(opts: RateLimitOptions) {
       }
       next();
     } catch (err) {
-      next(err);
+      // Fail-open, а не 500: Redis моргнул — ограничение временно не работает,
+      // но вход/регистрация не должны падать вместе с кэшем. Анонимный 500
+      // здесь хуже любого из вариантов: он валит всю аутентификацию.
+      if (err instanceof AppError && err.code === errorCodes.RATE_LIMITED) return next(err);
+      logger.error({ err, key: opts.key }, 'rate limit unavailable, failing open');
+      next();
     }
   };
 }
 
-/** Ограничение по IP для защиты от brute-force логина */
+/** Ограничение по IP для защиты от brute-force логина (до authenticate) */
 export function ipRateLimit(key: string, windowMs: number, max: number) {
-  return rateLimit({ key, windowMs, max, log: true });
+  return rateLimit({ key, windowMs, max, log: true, ipOnly: true });
+}
+
+/** Ограничение по пользователю: вешает строго на userId, а не на IP. */
+export function userRateLimit(key: string, windowMs: number, max: number) {
+  return rateLimit({ key, windowMs, max, log: true, userOnly: true });
 }

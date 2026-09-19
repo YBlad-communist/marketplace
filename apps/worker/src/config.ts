@@ -21,8 +21,15 @@ export const env = {
   S3_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY_ID ?? 'minioadmin',
   S3_SECRET_ACCESS_KEY: process.env.S3_SECRET_ACCESS_KEY ?? 'minioadmin',
   S3_PUBLIC_BASE_URL: process.env.S3_PUBLIC_BASE_URL ?? 'http://localhost:9000/marketplace',
+  S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE !== 'false',
   LOG_LEVEL: process.env.LOG_LEVEL ?? 'info',
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ?? '',
+  // Комиссия платформы: обязана совпадать с API (apps/api/src/config.ts),
+  // чтобы recovery-джоба переводила продавцу ту же сумму, что и releaseOrder.
+  STRIPE_PLATFORM_FEE_BASIS_POINTS: Number(process.env.STRIPE_PLATFORM_FEE_BASIS_POINTS ?? 200),
+  // Возраст RELEASING-заказа, после которого запускается восстановление
+  // (если releaseOrder упал между capture и финальной транзакцией).
+  RELEASING_RECOVERY_AFTER_MS: Number(process.env.RELEASING_RECOVERY_AFTER_MS ?? 5 * 60_000),
   // Возраст PAID-заказа в днях, после которого холд считаем истёкшим
   // (Stripe отменяет manual-capture авторизации примерно через 7 дней).
   STRIPE_HOLD_TTL_DAYS: Number(process.env.STRIPE_HOLD_TTL_DAYS ?? 7),

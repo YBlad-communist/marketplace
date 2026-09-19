@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import { Order, prisma } from '@marketplace/db';
-import { AppError, errorCodes } from '@marketplace/shared';
+import { AppError, errorCodes, releaseCaptureIdempotencyKey, releaseTransferIdempotencyKey } from '@marketplace/shared';
 import { env } from '../config.js';
 import { getRedis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
@@ -175,7 +175,6 @@ export async function createEscrowOrder(input: {
 }
 
 export async function releaseOrder(orderId: string, actorId: string): Promise<void> {
-  const s = getStripe();
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: { listing: { include: { seller: true } } },
@@ -193,34 +192,19 @@ export async function releaseOrder(orderId: string, actorId: string): Promise<vo
     throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
   }
 
-  const pi = await s.paymentIntents.capture(order.stripePaymentIntentId);
-  if (pi.status !== 'succeeded') {
-    throw new AppError(errorCodes.CONFLICT, 'Платёж не может быть завершён', 409);
+  // Атомарный переход PAID -> RELEASING (тот же паттерн, что и отсчёт RESERVED
+  // в createEscrowOrder): гонку двух параллельных release решает updateMany,
+  // а не чтение-проверка. Проигравший получает 409 и не доходит до Stripe —
+  // двойной выплаты не бывает даже при двух одновременных запросах.
+  const claimed = await prisma.order.updateMany({
+    where: { id: order.id, status: 'PAID' },
+    data: { status: 'RELEASING' },
+  });
+  if (claimed.count !== 1) {
+    throw new AppError(errorCodes.CONFLICT, 'Выплата уже обрабатывается', 409);
   }
 
-  const fee = Math.round((Number(order.amount) * env.STRIPE_PLATFORM_FEE_BASIS_POINTS) / 10000 * 100);
-  const transfer = await s.transfers.create({
-    amount: Math.round(Number(order.amount) * 100) - fee,
-    currency: order.currency.toLowerCase(),
-    destination: order.listing.seller.stripeAccountId!,
-    transfer_group: `order-${order.idempotencyKey?.slice(0, 24)}`,
-  });
-
-  await prisma.$transaction([
-    prisma.order.update({
-      where: { id: order.id },
-      data: {
-        status: 'RELEASED',
-        stripeTransferId: transfer.id,
-        platformFee: fee / 100,
-        releasedAt: new Date(),
-      },
-    }),
-    prisma.listing.update({
-      where: { id: order.listingId },
-      data: { status: 'SOLD' },
-    }),
-  ]);
+  await performRelease(order);
 
   const sellerEmail = order.listing.seller.email;
   if (sellerEmail) {
@@ -234,6 +218,78 @@ export async function releaseOrder(orderId: string, actorId: string): Promise<vo
   }
 }
 
+/**
+ * Выплата: capture + transfer + финальная транзакция.
+ *
+ * Идемпотентность: capture и transfer идут с idempotency-ключами
+ * `release-capture-{orderId}` / `release-{orderId}` (формат общий с
+ * recovery-джобой worker'а — см. packages/shared). Если процесс падает между
+ * capture и финальной транзакцией, повторный прогон с теми же ключами:
+ * - capture уже сделан — Stripe вернёт исходный результат по ключу;
+ * - transfer уже сделан — Stripe «дедуплицирует» по ключу и вернёт прежний
+ *   transfer, не создавая второй выплаты.
+ * Финальный переход RELEASING -> RELEASED дополнительно гейтится по статусу:
+ * если заказ уже доведён, листинг не переворачивается повторно.
+ */
+export async function performRelease(order: {
+  id: string;
+  listingId: string;
+  amount: unknown;
+  currency: string;
+  stripePaymentIntentId: string | null;
+  idempotencyKey: string | null;
+  listing?: { seller?: { stripeAccountId?: string | null } } | null;
+}): Promise<void> {
+  const s = getStripe();
+  if (!order.stripePaymentIntentId) {
+    throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
+  }
+
+  const pi = await s.paymentIntents.capture(order.stripePaymentIntentId, {
+    idempotencyKey: releaseCaptureIdempotencyKey(order.id),
+  });
+  if (pi.status !== 'succeeded') {
+    throw new AppError(errorCodes.CONFLICT, 'Платёж не может быть завершён', 409);
+  }
+
+  const fee = Math.round((Number(order.amount) * env.STRIPE_PLATFORM_FEE_BASIS_POINTS) / 10000 * 100);
+  const destination = order.listing?.seller?.stripeAccountId;
+  if (!destination) {
+    throw new AppError(errorCodes.CONFLICT, 'Счёт продавца не найден', 409);
+  }
+  const transfer = await s.transfers.create(
+    {
+      amount: Math.round(Number(order.amount) * 100) - fee,
+      currency: order.currency.toLowerCase(),
+      destination,
+      transfer_group: `order-${order.idempotencyKey?.slice(0, 24)}`,
+    },
+    { idempotencyKey: releaseTransferIdempotencyKey(order.id) }
+  );
+
+  const finished = await prisma.$transaction(async (tx) => {
+    const updated = await tx.order.updateMany({
+      where: { id: order.id, status: 'RELEASING' },
+      data: {
+        status: 'RELEASED',
+        stripeTransferId: transfer.id,
+        platformFee: fee / 100,
+        releasedAt: new Date(),
+      },
+    });
+    if (updated.count !== 1) return false;
+    await tx.listing.updateMany({
+      where: { id: order.listingId, status: 'RESERVED' },
+      data: { status: 'SOLD' },
+    });
+    return true;
+  });
+
+  if (!finished) {
+    logger.warn({ orderId: order.id, transferId: transfer.id }, 'release already completed by a concurrent run');
+  }
+}
+
 export async function refundOrder(orderId: string, actorId: string, role: string): Promise<void> {
   const s = getStripe();
   const order = await prisma.order.findUnique({ where: { id: orderId } });
@@ -243,7 +299,8 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   if (!isBuyer && !isStaff) {
     throw new AppError(errorCodes.FORBIDDEN, 'Нет прав на возврат', 403);
   }
-  if (order.status === 'RELEASED' || order.status === 'REFUNDED') {
+  // RELEASING — деньги уже движутся в сторону продавца: возврат запрещён.
+  if (order.status === 'RELEASED' || order.status === 'RELEASING' || order.status === 'REFUNDED') {
     throw new AppError(errorCodes.CONFLICT, `Нельзя вернуть заказ в статусе ${order.status}`, 409);
   }
   if (!order.stripePaymentIntentId) {

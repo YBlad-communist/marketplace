@@ -24,6 +24,13 @@ export function createApp(): Express {
 
   app.disable('x-powered-by');
 
+  // За nginx/Cloudflare req.ip без этой настройки возвращает адрес прокси:
+  // все rate limit'ы схлопывались бы в одну корзину, а security-логи и IP
+  // сессий показывали бы не клиента. Число хопов (не true): Express берёт
+  // правый адрес из X-Forwarded-For (добавлен доверенным прокси), левые
+  // подделки игнорируются.
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
+
   if (isProd) {
     app.use(
       helmet({
