@@ -100,3 +100,12 @@ export interface OrderDto {
   listing?: ListingDto;
   buyer?: { id: string; name: string };
 }
+
+export interface SessionDto {
+  familyId: string;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: string;
+  expiresAt: string;
+  current: boolean;
+}

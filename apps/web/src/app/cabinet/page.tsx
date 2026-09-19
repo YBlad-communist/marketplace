@@ -68,6 +68,9 @@ export default function CabinetPage() {
                 Подключить выплаты (Stripe)
               </Link>
             )}
+            <Link href="/cabinet/sessions" className="btn-secondary text-xs">
+              Активные сессии
+            </Link>
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Request } from 'express';
 import {
   changePasswordSchema,
   forgotPasswordSchema,
@@ -18,6 +19,11 @@ import { ipRateLimit } from '../middleware/rateLimit.js';
 import { requireTurnstile } from '../middleware/turnstile.js';
 import * as authService from '../services/authService.js';
 import * as oauthService from '../services/oauthService.js';
+import {
+  findSessionFamilyByToken,
+  getActiveSessions,
+  revokeSessionFamily,
+} from '../services/tokenService.js';
 import { refreshCookieName, refreshCookieOptions, clearRefreshCookieOptions } from '../lib/cookies.js';
 import { logSecurityEvent } from '../lib/logger.js';
 import { env } from '../config.js';
@@ -26,6 +32,13 @@ const router: Router = Router();
 
 function setRefreshCookie(res: { cookie: (n: string, v: string, o: object) => void }, token: string) {
   res.cookie(refreshCookieName, token, refreshCookieOptions);
+}
+
+function refreshTokenFromReq(req: Request): string | null {
+  return (
+    extractTokenFromCookie(req, refreshCookieName) ??
+    (typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : null)
+  );
 }
 
 router.post(
@@ -158,6 +171,43 @@ router.post(
 router.post('/password/change', authenticate, validate(changePasswordSchema), async (req, res, next) => {
   try {
     await authService.changePassword(req.userId!, req.body);
+    res.json({ data: { success: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/sessions', authenticate, async (req, res, next) => {
+  try {
+    const sessions = await getActiveSessions(req.userId!);
+    const currentToken = refreshTokenFromReq(req);
+    const currentFamilyId = currentToken ? await findSessionFamilyByToken(currentToken) : null;
+    res.json({
+      data: {
+        items: sessions.map((s) => ({ ...s, current: s.familyId === currentFamilyId })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/sessions/:familyId', authenticate, async (req, res, next) => {
+  try {
+    const familyId = req.params.familyId;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(familyId)) {
+      throw new AppError(errorCodes.VALIDATION, 'Некорректный идентификатор сессии', 400);
+    }
+    const currentToken = refreshTokenFromReq(req);
+    const currentFamilyId = currentToken ? await findSessionFamilyByToken(currentToken) : null;
+    if (familyId === currentFamilyId) {
+      throw new AppError(errorCodes.CONFLICT, 'Нельзя отозвать текущую сессию — используйте «Выйти»', 409);
+    }
+    const revoked = await revokeSessionFamily(req.userId!, familyId);
+    if (!revoked) {
+      throw new AppError(errorCodes.NOT_FOUND, 'Сессия не найдена', 404);
+    }
+    logSecurityEvent('session_revoked', { userId: req.userId, familyId });
     res.json({ data: { success: true } });
   } catch (err) {
     next(err);

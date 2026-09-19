@@ -186,6 +186,57 @@ export async function revokeAllUserSessions(userId: string): Promise<void> {
   await Promise.all(families.map((f) => revokeFamily(f.familyId)));
 }
 
+export interface SessionInfo {
+  familyId: string;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+/**
+ * Активные сессии пользователя. Семья == устройство/браузер: при ротации
+ * старые строки получают revokedAt, поэтому у активной семьи остаётся ровно
+ * одна «живая» строка с актуальными userAgent/ip/createdAt.
+ */
+export async function getActiveSessions(userId: string): Promise<SessionInfo[]> {
+  const rows = await prisma.refreshTokenFamily.findMany({
+    where: { userId, revokedAt: null, expiresAt: { gte: new Date() } },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
+  const seen = new Set<string>();
+  const sessions: SessionInfo[] = [];
+  for (const row of rows) {
+    if (seen.has(row.familyId)) continue;
+    seen.add(row.familyId);
+    sessions.push({
+      familyId: row.familyId,
+      userAgent: row.userAgent,
+      ip: row.ip,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+    });
+  }
+  return sessions;
+}
+
+export async function findSessionFamilyByToken(token: string): Promise<string | null> {
+  const hashed = hashToken(token);
+  const record = await prisma.refreshTokenFamily.findUnique({ where: { tokenHash: hashed } });
+  return record?.familyId ?? null;
+}
+
+export async function revokeSessionFamily(userId: string, familyId: string): Promise<boolean> {
+  const updated = await prisma.refreshTokenFamily.updateMany({
+    where: { userId, familyId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  if (updated.count === 0) return false;
+  await revokeFamily(familyId);
+  return true;
+}
+
 export async function cleanupExpiredTokens(): Promise<void> {
   // Реализация — в @marketplace/db, здесь оставлена обёртка для совместимости.
   await runSharedCleanup();

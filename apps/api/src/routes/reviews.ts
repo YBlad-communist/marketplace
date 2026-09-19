@@ -6,6 +6,10 @@ import { authenticate } from '../middleware/auth.js';
 
 const router: Router = Router();
 
+// Минимальная сумма завершённого заказа, по которому можно оставить отзыв.
+// Защита от накрутки рейтинга «символическими» сделками на копейки.
+const MIN_REVIEW_ORDER_TOTAL = 1;
+
 router.post('/', authenticate, validate(reviewCreateSchema), async (req, res, next) => {
   try {
     const { revieweeId, orderId, rating, text } = req.body;
@@ -20,8 +24,15 @@ router.post('/', authenticate, validate(reviewCreateSchema), async (req, res, ne
     if (!isBuyer && !isSeller) {
       throw new AppError(errorCodes.FORBIDDEN, 'Отзыв можно оставить только по своей сделке', 403);
     }
-    if (order.status !== 'RELEASED' && order.status !== 'REFUNDED') {
-      throw new AppError(errorCodes.CONFLICT, 'Отзыв доступен после завершения сделки', 409);
+    // Отзыв пишется только после фактически завершённой сделки (RELEASED):
+    // REFUNDED/возврат означает, что товар покупателю не передан, и его оценка
+    // лишь засоряет рейтинг. Оценка «взаимной» рекламы с копеечными сделками
+    // тоже отсекается минимальной суммой заказа.
+    if (order.status !== 'RELEASED') {
+      throw new AppError(errorCodes.CONFLICT, 'Отзыв доступен только после успешно завершённой сделки', 409);
+    }
+    if (order.amount.toNumber() < MIN_REVIEW_ORDER_TOTAL) {
+      throw new AppError(errorCodes.VALIDATION, 'Сумма заказа слишком мала для отзыва', 400);
     }
     // Контрагента берём из заказа, а не из тела запроса: иначе один заказ
     // позволял бы лепить отзывы любым пользователям платформы.
