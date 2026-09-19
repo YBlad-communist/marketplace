@@ -27,6 +27,7 @@ enum OrderStatus {
   PAID
   RELEASING
   RELEASED
+  REFUNDING
   REFUNDED
   DISPUTED
 }

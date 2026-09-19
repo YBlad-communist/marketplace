@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import { Order, prisma } from '@marketplace/db';
-import { AppError, errorCodes, releaseCaptureIdempotencyKey, releaseTransferIdempotencyKey } from '@marketplace/shared';
+import { AppError, errorCodes, releaseCaptureIdempotencyKey, releaseTransferIdempotencyKey, refundCancelIdempotencyKey, refundIdempotencyKey } from '@marketplace/shared';
 import { env } from '../config.js';
 import { getRedis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
@@ -299,7 +299,12 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   if (!isBuyer && !isStaff) {
     throw new AppError(errorCodes.FORBIDDEN, 'Нет прав на возврат', 403);
   }
-  // RELEASING — деньги уже движутся в сторону продавца: возврат запрещён.
+  // REFUNDING — возврат уже движется: повторный вызов (двойной клик, ретрай
+  // после таймаута, одновременное действие покупателя и модератора) получает 409.
+  if (order.status === 'REFUNDING') {
+    throw new AppError(errorCodes.CONFLICT, 'Возврат уже обрабатывается', 409);
+  }
+  // RELEASING/RELEASED — деньги движутся к продавцу: возврат запрещён.
   if (order.status === 'RELEASED' || order.status === 'RELEASING' || order.status === 'REFUNDED') {
     throw new AppError(errorCodes.CONFLICT, `Нельзя вернуть заказ в статусе ${order.status}`, 409);
   }
@@ -311,15 +316,52 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   if (pi.status !== 'requires_capture' && pi.status !== 'succeeded') {
     throw new AppError(errorCodes.CONFLICT, 'Платёж в неподходящем статусе', 409);
   }
-  await s.paymentIntents.cancel(order.stripePaymentIntentId).catch(() => {
-    return s.refunds.create({ payment_intent: order.stripePaymentIntentId! });
-  });
 
-  await prisma.order.update({
-    where: { id: order.id },
-    data: { status: 'REFUNDED' },
+  // Атомарный клейм возврата (PAID/…/DISPUTED -> REFUNDING). Гонку двух
+  // параллельных refundOrder решает updateMany, как у releaseOrder: проигравший
+  // получает 409 и НЕ доходит до Stripe, поэтому двойного cancel/refund не бывает.
+  const claimed = await prisma.order.updateMany({
+    where: { id: order.id, status: { in: ['PENDING', 'PAID', 'DISPUTED'] } },
+    data: { status: 'REFUNDING' },
   });
-  await unlockListing(order.listingId);
+  if (claimed.count !== 1) {
+    throw new AppError(errorCodes.CONFLICT, 'Возврат уже обрабатывается', 409);
+  }
+
+  const previousStatus = order.status;
+  try {
+    // Идемпотентность: один и тот же заказ не отменяет/не возвращает дважды
+    // даже если наш пакет дойдёт до Stripe повторно (см. shared/constants).
+    await s.paymentIntents.cancel(order.stripePaymentIntentId, {
+      idempotencyKey: refundCancelIdempotencyKey(order.id),
+    }).catch(() => {
+      return s.refunds.create(
+        { payment_intent: order.stripePaymentIntentId! },
+        { idempotencyKey: refundIdempotencyKey(order.id) }
+      );
+    });
+  } catch (err) {
+    // Stripe недоступен/отклонил — не оставляем заказ навсегда в REFUNDING:
+    // возвращаем статус, с которого клеймили. Гейтим по REFUNDING, чтобы не
+    // затереть параллельный переход (например, вебхук уже провёл REFUNDED).
+    await prisma.order.updateMany({
+      where: { id: order.id, status: 'REFUNDING' },
+      data: { status: previousStatus },
+    });
+    logger.warn({ err, orderId: order.id }, 'refund: stripe call failed, order moved back from REFUNDING');
+    throw err;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.order.updateMany({
+      where: { id: order.id, status: 'REFUNDING' },
+      data: { status: 'REFUNDED' },
+    });
+    await tx.listing.updateMany({
+      where: { id: order.listingId, status: 'RESERVED' },
+      data: { status: 'ACTIVE' },
+    });
+  });
 }
 
 /** Вебхук Stripe: проверка подписи + идемпотентная обработка */
@@ -431,11 +473,42 @@ export async function handleStripeWebhook(
       break;
     }
     case 'charge.dispute.created': {
-      // Чарджбэк: покупатель оспорил платёж через банк. Платформа фиксирует
-      // спор и зовёт администратора, деньги Stripe может списать обратно.
+      // Чарджбэк: покупатель оспорил платёж через банк. Дальше — по статусу заказа.
+      // Это важно: банковский чарджбэк может прийти спустя недели после сделки.
       const dispute = event.data.object as Stripe.Dispute;
       const piId = await resolveDisputePaymentIntent(dispute);
       if (piId) {
+        const existing = await prisma.order.findFirst({
+          where: { stripePaymentIntentId: piId },
+          select: { id: true, status: true },
+        });
+        if (existing && (existing.status === 'RELEASED' || existing.status === 'RELEASING')) {
+          // Деньги уже переведены продавцу (или переводятся): платформа не может
+          // забрать их через Stripe, а «диспутом» такой заказ помечать нельзя —
+          // иначе при lost система попробует вернуть уже выплаченное. Статус НЕ
+          // трогаем, уведомляем админа про ручное урегулирование вне автоматики.
+          logger.warn({
+            orderId: existing.id, piId, disputeId: dispute.id, status: existing.status,
+          }, 'chargeback opened for already-paid-out order; manual resolution required');
+          await notifyAdmin(
+            'Спор по уже выплаченной сделке',
+            `Dispute ${dispute.id} по PaymentIntent ${piId} на сумму ${dispute.amount}. ` +
+              `Заказ ${existing.id} уже переведён продавцу (статус ${existing.status}): ` +
+              `возврат через Stripe невозможен, урегулирование вручную.`
+          );
+          break;
+        }
+        if (existing && existing.status === 'REFUNDING') {
+          // Чарджбэк пересекается с уже идущим возвратом: статус не трогаем.
+          logger.warn({
+            orderId: existing.id, piId, disputeId: dispute.id,
+          }, 'chargeback opened while refund in progress; keeping REFUNDING');
+          await notifyAdmin(
+            'Спор пересекается с возвратом',
+            `Dispute ${dispute.id} по PaymentIntent ${piId} открыт, пока заказ ${existing.id} уже был в REFUNDING. Резерв/возврат продолжаются; требуйте уточнения.`
+          );
+          break;
+        }
         const marked = await prisma.order.updateMany({
           where: { stripePaymentIntentId: piId, status: { notIn: ['REFUNDED', 'DISPUTED'] } },
           data: { status: 'DISPUTED' },

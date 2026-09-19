@@ -72,10 +72,18 @@ export async function checkExpiredHoldsJob(): Promise<{ checked: number; refunde
       continue;
     }
 
-    await prisma.order.update({
-      where: { id: order.id },
+    // Атомарный клейм PAID -> REFUNDED, как в releaseOrder: между чтением списка
+    // и записью покупатель мог успеть перевести заказ в RELEASING (releaseOrder).
+    // Простое order.update затёрло бы начатую выплату статусом REFUNDED; updateMany
+    // с условием на PAID проигрывает гонку и пропускает заказ.
+    const claimed = await prisma.order.updateMany({
+      where: { id: order.id, status: 'PAID' },
       data: { status: 'REFUNDED' },
     });
+    if (claimed.count === 0) {
+      logger.info({ orderId: order.id }, 'expired holds: order left PAID before update, skipping');
+      continue;
+    }
     await prisma.listing.updateMany({
       where: { id: order.listingId, status: 'RESERVED' },
       data: { status: 'ACTIVE' },

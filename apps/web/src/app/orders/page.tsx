@@ -13,7 +13,8 @@ const STATUS_LABEL: Record<OrderDto['status'], string> = {
   PAID: 'Оплачен (эскроу)',
   RELEASING: 'Выплата',
   RELEASED: 'Завершён',
-  REFUNDED: 'Возврат',
+  REFUNDING: 'Возврат',
+  REFUNDED: 'Возвращён',
   DISPUTED: 'Спор',
 };
 
@@ -56,7 +57,7 @@ function OrderRow({
         className={cn(
           order.status === 'RELEASED' && 'badge-green',
           order.status === 'REFUNDED' && 'badge-red',
-          (order.status === 'PENDING' || order.status === 'RELEASING') && 'badge-gray',
+          (order.status === 'PENDING' || order.status === 'RELEASING' || order.status === 'REFUNDING') && 'badge-gray',
           (order.status === 'PAID' || order.status === 'DISPUTED') && 'badge-amber'
         )}
       >

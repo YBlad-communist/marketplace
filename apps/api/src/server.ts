@@ -7,6 +7,7 @@ import { initSocket } from './lib/socket.js';
 import { logger } from './lib/logger.js';
 import { closeQueues } from './queues/index.js';
 import { enqueueTokenCleanup, enqueueExpiredHoldsCheck, enqueueReleasingRecovery } from './services/notificationService.js';
+import { scheduleCriticalJob } from './services/jobScheduler.js';
 
 async function main() {
   await connectRedis();
@@ -21,9 +22,12 @@ async function main() {
     logger.info(`API listening on :${env.PORT}`);
   });
 
-  await enqueueTokenCleanup().catch(() => undefined);
-  await enqueueExpiredHoldsCheck().catch(() => undefined);
-  await enqueueReleasingRecovery().catch(() => undefined);
+  // Защитные repeatable-джобы: если Redis при старте на секунду недоступен,
+  // ретраим с backoff и фиксируем ошибку в лог, а не глотаем молча — иначе
+  // чистка холдов / recovery выплат не запланируется без единой строчки.
+  await scheduleCriticalJob('enqueueTokenCleanup', () => enqueueTokenCleanup());
+  await scheduleCriticalJob('enqueueExpiredHoldsCheck', () => enqueueExpiredHoldsCheck());
+  await scheduleCriticalJob('enqueueReleasingRecovery', () => enqueueReleasingRecovery());
 
   const shutdown = async (signal: string) => {
     logger.info(`received ${signal}, shutting down`);

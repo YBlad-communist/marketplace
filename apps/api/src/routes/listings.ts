@@ -27,7 +27,7 @@ import { logSecurityEvent } from '../lib/logger.js';
 const router: Router = Router();
 
 /** Заказы, из-за которых объявление нельзя редактировать/удалять */
-const LOCKED_ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'DISPUTED'] as const;
+const LOCKED_ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'REFUNDING', 'DISPUTED'] as const;
 
 async function assertNoActiveOrder(listingId: string, action: string): Promise<void> {
   const active = await prisma.order.findFirst({

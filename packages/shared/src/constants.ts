@@ -9,7 +9,7 @@ export const ALLOWED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp'] as const;
 
 export const USER_ROLES = ['USER', 'MODERATOR', 'ADMIN'] as const;
 export const LISTING_STATUSES = ['PENDING', 'ACTIVE', 'RESERVED', 'SOLD', 'REJECTED', 'ARCHIVED'] as const;
-export const ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'RELEASED', 'REFUNDED', 'DISPUTED'] as const;
+export const ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'RELEASED', 'REFUNDING', 'REFUNDED', 'DISPUTED'] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 export type ListingStatus = (typeof LISTING_STATUSES)[number];
@@ -22,6 +22,15 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number];
  */
 export const releaseCaptureIdempotencyKey = (orderId: string) => `release-capture-${orderId}`;
 export const releaseTransferIdempotencyKey = (orderId: string) => `release-${orderId}`;
+
+/**
+ * Идемпотентные ключи Stripe для возврата (refundOrder): `refund-cancel-{id}`
+ * для paymentIntents.cancel и `refund-{id}` для refunds.create. Повторный
+ * вызов с тем же ключом Stripe дедуплицирует операцию — параллельный/двойной
+ * возврат не создаст второго списания.
+ */
+export const refundCancelIdempotencyKey = (orderId: string) => `refund-cancel-${orderId}`;
+export const refundIdempotencyKey = (orderId: string) => `refund-${orderId}`;
 
 export const MIN_PASSWORD_LENGTH = 8;
 export const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;

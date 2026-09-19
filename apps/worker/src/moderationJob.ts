@@ -16,10 +16,19 @@ export async function moderateListingJob(data: ModerationJobData): Promise<void>
   const banned = PROHIBITED.find((w) => text.includes(w));
 
   if (banned) {
-    await prisma.listing.update({
-      where: { id: listing.id },
+    // Атомарно отклоняем только объявления без активной сделки: асинхронная
+    // повторная модерация (по жалобе, с задержкой) не должна задним числом
+    // зарезать уже RESERVED/SOLD позицию — это сломало бы идущий эскроу.
+    const rejected = await prisma.listing.updateMany({
+      where: { id: listing.id, status: { in: ['PENDING', 'ACTIVE'] } },
       data: { status: 'REJECTED', moderationNote: `Запрещённый контент: «${banned}»` },
     });
+    if (rejected.count === 0) {
+      await prisma.listing.update({
+        where: { id: listing.id },
+        data: { moderationNote: `Запрещённый контент: «${banned}»` },
+      });
+    }
   } else if (listing.status === 'PENDING') {
     await prisma.listing.update({
       where: { id: listing.id },
