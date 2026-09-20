@@ -86,11 +86,6 @@ export default function LoginPage() {
               Зарегистрируйтесь
             </Link>
           </div>
-          <div className="border-t pt-4">
-            <button type="button" className="btn-secondary w-full opacity-60" disabled title="Вход через Google временно недоступен">
-              Войти через Google
-            </button>
-          </div>
         </form>
       </main>
     </div>

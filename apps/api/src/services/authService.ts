@@ -202,7 +202,7 @@ export async function changePassword(
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
   if (!user.passwordHash) {
-    throw new AppError(errorCodes.CONFLICT, 'Пароль не задан (OAuth-аккаунт)', 409);
+    throw new AppError(errorCodes.CONFLICT, 'Для аккаунта не задан пароль, обратитесь в поддержку', 409);
   }
   const ok = await argon2.verify(user.passwordHash, input.currentPassword);
   if (!ok) {

@@ -25,7 +25,7 @@ cp .env.example .env
 
 Вебхуки ЮKassa настраиваются в ЛК ЮKassa → «Настройки» → «Уведомления» (URL `https://<ваш-домен>/api/webhooks/yookassa`). Для локальной разработки нужен туннель (ngrok/cloudflared) — при этом в `.env` поставьте `YOOKASSA_INSECURE_WEBHOOKS=true`, чтобы API не отсекал уведомления по IP-аллоулисту.
 
-Google OAuth **временно отключён**: кнопка «Войти через Google» на `/login` задизейблена, серверный роут `/api/auth/oauth/google` отвечает редиректом на `/login?error=oauth`. Подключение VK ID / Яндекс ID запланировано (см. `apps/api/src/routes/auth.ts`).
+Вход — только по номеру телефона и паролю, сторонние сервисы входа не подключаются.
 
 ---
 

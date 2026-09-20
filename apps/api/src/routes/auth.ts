@@ -24,7 +24,6 @@ import {
 } from '../services/tokenService.js';
 import { refreshCookieName, refreshCookieOptions, clearRefreshCookieOptions } from '../lib/cookies.js';
 import { logSecurityEvent } from '../lib/logger.js';
-import { env } from '../config.js';
 
 const router: Router = Router();
 
@@ -210,12 +209,6 @@ router.delete('/sessions/:familyId', authenticate, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
-
-router.get('/oauth/google', async (_req, res) => {
-  // OAuth отключён до подключения реального провайдера: вход только по телефону.
-  // Заглушка возвращает понятное сообщение и не выполняет внешних запросов.
-  res.redirect(`${env.APP_URL}/login?error=oauth`);
 });
 
 export default router;
