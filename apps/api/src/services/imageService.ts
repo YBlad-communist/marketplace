@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import sharp, { type Sharp } from 'sharp';
 import { PutObjectCommand, S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { env } from '../config.js';
 import { AppError, errorCodes } from '@marketplace/shared';
@@ -51,7 +51,7 @@ export async function processImage(
     throw new AppError(errorCodes.VALIDATION, 'Файл слишком большой', 400);
   }
 
-  let image: sharp.Sharp;
+  let image: Sharp;
   try {
     image = sharp(buffer, { failOn: 'error' });
     const meta = await image.metadata();

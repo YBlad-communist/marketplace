@@ -2,6 +2,11 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+overrides:
+  postcss: ^8.5.25
+  nanoid: ^3.3.19
+  qs: ^6.16.0
+
 allowBuilds:
   '@prisma/client': true
   '@prisma/engines': true
