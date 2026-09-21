@@ -231,8 +231,9 @@ router.patch(
 router.delete('/:id', authenticate, async (req, res, next) => {
   try {
     const { listing, isOwner } = await assertOwnerOrModerator(req.params.id, req.userId!, req.userRole!);
-    if (!isOwner && req.userRole !== 'ADMIN') {
-      throw new AppError(errorCodes.FORBIDDEN, 'Удалять может только владелец', 403);
+    const isStaff = req.userRole === 'ADMIN' || req.userRole === 'MODERATOR';
+    if (!isOwner && !isStaff) {
+      throw new AppError(errorCodes.FORBIDDEN, 'Удалять может только владелец или модератор', 403);
     }
     // Явная проверка до удаления: любой заказ (активный или закрытый) блочит
     // удаление объявления из-за RESTRICT-FK. Без неё Postgres отдал бы 23001
@@ -240,6 +241,13 @@ router.delete('/:id', authenticate, async (req, res, next) => {
     await assertNoOrderHistory(listing.id);
     const images = await prisma.listingImage.findMany({ where: { listingId: listing.id }, select: { key: true } });
     await prisma.listing.delete({ where: { id: listing.id } });
+    if (!isOwner) {
+      logSecurityEvent('listing_deleted_by_staff', {
+        listingId: listing.id,
+        staffId: req.userId,
+        role: req.userRole,
+      });
+    }
     // Файлы из корзины убирает фоновая джоба S3 с ретраями — если MinIO упал,
     // объекты не остаются сиротами, а ответ API не зависит от хранилища.
     await enqueueS3Delete(images.map((i) => i.key)).catch(() => {

@@ -139,6 +139,25 @@ export default function ListingPage() {
     onError: () => setChatError('Не удалось отправить жалобу'),
   });
 
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const deleteMutation = useMutation({
+    mutationFn: () => del(`/api/listings/${listingId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['listing', params.id] });
+      router.push('/');
+    },
+    onError: (err) => {
+      setDeleteError(err instanceof ApiError ? err.message : 'Не удалось удалить объявление');
+    },
+  });
+
+  const handleDelete = () => {
+    setDeleteError(null);
+    if (!window.confirm('Удалить объявление безвозвратно? Это действие нельзя отменить.')) return;
+    deleteMutation.mutate();
+  };
+
   if (listingQuery.isLoading) {
     return (
       <div>
@@ -183,6 +202,8 @@ export default function ListingPage() {
   }
 
   const isOwner = user?.id === listing.seller.id;
+  const isStaff = user?.role === 'ADMIN' || user?.role === 'MODERATOR';
+  const canDelete = isOwner || isStaff;
 
   return (
     <div>
@@ -255,12 +276,26 @@ export default function ListingPage() {
               </div>
             )}
             {chatError && <p className="mt-2 text-sm text-red-600">{chatError}</p>}
-            {isOwner && (
+            {canDelete && (
               <div className="mt-8 flex gap-3">
-                <Link href={`/listings/${listing.id}/edit`} className="btn-secondary">
-                  Редактировать
-                </Link>
+                {isOwner && (
+                  <Link href={`/listings/${listing.id}/edit`} className="btn-secondary">
+                    Редактировать
+                  </Link>
+                )}
+                <button
+                  className="btn-danger"
+                  disabled={deleteMutation.isPending}
+                  onClick={handleDelete}
+                >
+                  {deleteMutation.isPending ? 'Удаление…' : 'Удалить объявление'}
+                </button>
               </div>
+            )}
+            {deleteError && (
+              <p className="mt-2 text-sm text-red-600" role="alert">
+                {deleteError}
+              </p>
             )}
             <div className="mt-4">
               {reportSent ? (

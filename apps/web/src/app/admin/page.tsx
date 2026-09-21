@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
-import { get, post } from '@/lib/api';
+import { del, get, post } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { cn, formatDate, formatDateTime, formatPrice } from '@/lib/format';
 
@@ -88,6 +88,11 @@ export default function AdminPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
   });
 
+  const deleteListing = useMutation({
+    mutationFn: (id: string) => del(`/api/listings/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-pending'] }),
+  });
+
   if (!isStaff) {
     return (
       <div>
@@ -152,6 +157,15 @@ export default function AdminPage() {
                   </button>
                   <button className="btn-danger text-xs" onClick={() => moderate.mutate({ id: l.id, action: 'REJECT', reason: 'Отклонено модератором' })}>
                     Отклонить
+                  </button>
+                  <button
+                    className="btn-danger text-xs"
+                    disabled={deleteListing.isPending}
+                    onClick={() => {
+                      if (window.confirm('Удалить объявление безвозвратно?')) deleteListing.mutate(l.id);
+                    }}
+                  >
+                    Удалить
                   </button>
                 </div>
               </div>
