@@ -95,6 +95,14 @@ export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
         <p className="mb-4 text-sm text-gray-600">
           {formatPrice(price, currency)} — деньги удерживаются платформой до подтверждения получения товара.
         </p>
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+          <p className="font-medium">Как это работает</p>
+          <p className="mt-1">
+            Деньги не переводятся продавцу сразу — они блокируются на вашей карте.
+            Спишутся только после того, как вы подтвердите получение товара или услуги.
+            Не подтвердите — блокировка снимется автоматически через 7 дней, и деньги останутся у вас.
+          </p>
+        </div>
         {status === 'loading' && <p className="text-sm text-gray-500">Подготавливаем оплату…</p>}
         {status === 'error' && <p className="mb-4 text-sm text-red-600">{error ?? 'Не удалось начать оплату'}</p>}
         {status === 'ready' && (

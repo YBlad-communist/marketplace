@@ -32,6 +32,11 @@ export default function HomePage() {
   const [sort, setSort] = useState('date_desc');
 
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
+  // Дополнительные фильтры (город, цена, сортировка) спрятаны по умолчанию,
+  // но открываются сами, если такой фильтр уже применён — чтобы он не «потерялся».
+  const [filtersOpen, setFiltersOpen] = useState(
+    () => Boolean(appliedFilters.city || appliedFilters.minPrice || appliedFilters.maxPrice)
+  );
 
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
@@ -52,7 +57,9 @@ export default function HomePage() {
   });
 
   const apply = () => {
-    setAppliedFilters({ q: q.trim(), category, city: city.trim(), minPrice: minPrice.trim(), maxPrice: maxPrice.trim() });
+    const next = { q: q.trim(), category, city: city.trim(), minPrice: minPrice.trim(), maxPrice: maxPrice.trim() };
+    setAppliedFilters(next);
+    if (next.city || next.minPrice || next.maxPrice) setFiltersOpen(true);
   };
 
   const loadMore = async () => {
@@ -85,7 +92,7 @@ export default function HomePage() {
         </p>
 
         <div className="card mt-4 p-4">
-          <div className="grid gap-3 md:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-4">
             <div className="md:col-span-2">
               <label className="sr-only" htmlFor="home-search">
                 Поиск по объявлениям
@@ -110,80 +117,100 @@ export default function HomePage() {
                 onChange={(e) => setCategory(e.target.value)}
               >
                 <option value="">Все категории</option>
-                {categoriesQuery.data?.data.categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
+                {(categoriesQuery.data?.data.categories ?? []).map((c) => (
+                  <optgroup key={c.id} label={c.name}>
+                    <option value={c.id}>{c.name}</option>
+                    {(c.children ?? []).map((ch) => (
+                      <option key={ch.id} value={ch.id}>
+                        — {ch.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="sr-only" htmlFor="home-city">
-                Город
-              </label>
-              <input
-                id="home-city"
-                className="input"
-                placeholder="Город"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-              />
-            </div>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <label className="sr-only" htmlFor="home-min">
-                  Цена от
-                </label>
-                <input
-                  id="home-min"
-                  className="input"
-                  placeholder="от"
-                  inputMode="numeric"
-                  value={minPrice}
-                  onChange={(e) => setMinPrice(e.target.value)}
-                />
-              </div>
-              <div className="flex-1">
-                <label className="sr-only" htmlFor="home-max">
-                  Цена до
-                </label>
-                <input
-                  id="home-max"
-                  className="input"
-                  placeholder="до"
-                  inputMode="numeric"
-                  value={maxPrice}
-                  onChange={(e) => setMaxPrice(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex gap-2 text-xs" role="group" aria-label="Сортировка">
-              {[
-                { id: 'date_desc', label: 'Сначала новые' },
-                { id: 'price_asc', label: 'Дешевле' },
-                { id: 'price_desc', label: 'Дороже' },
-              ].map((s) => (
-                <button
-                  key={s.id}
-                  aria-pressed={sort === s.id}
-                  className={cn(
-                    'rounded-full border px-3 py-1.5 transition-colors',
-                    sort === s.id
-                      ? 'border-brand-600 bg-brand-50 font-medium text-brand-700'
-                      : 'border-gray-300 text-gray-600 hover:border-gray-400'
-                  )}
-                  onClick={() => setSort(s.id)}
-                >
-                  {s.label}
-                </button>
-              ))}
             </div>
             <button className="btn-primary" onClick={apply}>
               Применить
             </button>
           </div>
+          <div className="mt-3">
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              aria-expanded={filtersOpen}
+              aria-controls="home-extra-filters"
+              onClick={() => setFiltersOpen((v) => !v)}
+            >
+              {filtersOpen ? 'Свернуть фильтры ⌃' : 'Ещё фильтры ⌄'}
+            </button>
+          </div>
+          {filtersOpen && (
+            <div id="home-extra-filters" className="mt-3 grid gap-3 md:grid-cols-4">
+              <div>
+                <label className="sr-only" htmlFor="home-city">
+                  Город
+                </label>
+                <input
+                  id="home-city"
+                  className="input"
+                  placeholder="Город"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="sr-only" htmlFor="home-min">
+                    Цена от
+                  </label>
+                  <input
+                    id="home-min"
+                    className="input"
+                    placeholder="от"
+                    inputMode="numeric"
+                    value={minPrice}
+                    onChange={(e) => setMinPrice(e.target.value)}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="sr-only" htmlFor="home-max">
+                    Цена до
+                  </label>
+                  <input
+                    id="home-max"
+                    className="input"
+                    placeholder="до"
+                    inputMode="numeric"
+                    value={maxPrice}
+                    onChange={(e) => setMaxPrice(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <div className="flex h-full flex-wrap items-center gap-2 text-xs" role="group" aria-label="Сортировка">
+                  {[
+                    { id: 'date_desc', label: 'Сначала новые' },
+                    { id: 'price_asc', label: 'Дешевле' },
+                    { id: 'price_desc', label: 'Дороже' },
+                  ].map((s) => (
+                    <button
+                      key={s.id}
+                      aria-pressed={sort === s.id}
+                      className={cn(
+                        'rounded-full border px-3 py-1.5 transition-colors',
+                        sort === s.id
+                          ? 'border-brand-600 bg-brand-50 font-medium text-brand-700'
+                          : 'border-gray-300 text-gray-600 hover:border-gray-400'
+                      )}
+                      onClick={() => setSort(s.id)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {listingsQuery.isLoading && (
