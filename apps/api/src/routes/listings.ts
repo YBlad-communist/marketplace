@@ -318,6 +318,27 @@ router.post(
   }
 );
 
+router.delete('/:id/images/:imageId', authenticate, async (req, res, next) => {
+  try {
+    const { listing } = await assertOwnerOrModerator(req.params.id, req.userId!, req.userRole!);
+    const image = await prisma.listingImage.findUnique({ where: { id: req.params.imageId } });
+    if (!image || image.listingId !== listing.id) {
+      throw new AppError(errorCodes.NOT_FOUND, 'Фото не найдено', 404);
+    }
+    await prisma.listingImage.delete({ where: { id: image.id } });
+    await enqueueS3Delete([image.key]).catch(() => {
+      logSecurityEvent('s3_delete_enqueue_failed', { listingId: listing.id, imageId: image.id });
+    });
+    const images = await prisma.listingImage.findMany({
+      where: { listingId: listing.id },
+      orderBy: { position: 'asc' },
+    });
+    res.json({ data: { images } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/:id/favorite', authenticate, async (req, res, next) => {
   try {
     const listing = await prisma.listing.findUnique({ where: { id: req.params.id } });

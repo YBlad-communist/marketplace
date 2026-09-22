@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ApiError, get, post, patch } from '@/lib/api';
 import { ImageUploader } from '@/components/ImageUploader';
+import { ExistingImagesEditor } from '@/components/ExistingImagesEditor';
 import { CategoryAttributeDto, CategoryDto, ListingDto } from '@/lib/types';
 
 interface Props {
@@ -228,9 +229,7 @@ export function ListingForm({ mode, initial }: Props) {
       ) : (
         <div>
           <label className="label">Фотографии</label>
-          <p className="text-sm text-gray-500">
-            Фото не меняются через редактирование. Текущие фото видны на странице объявления.
-          </p>
+          <ExistingImagesEditor listingId={initial!.id} />
         </div>
       )}
 
