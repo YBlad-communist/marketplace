@@ -75,7 +75,7 @@ export async function listConversations(userId: string, cursor?: string, limit =
 
   const items = await Promise.all(
     page.map(async (c) => {
-      const lastMessage = c.messages[0] ?? null;
+      const lastMessage = c.messages[0] ? (c.messages[0].deletedAt ? { ...c.messages[0], text: 'Сообщение удалено' } : c.messages[0]) : null;
       const lastReadAt = lastRead.get(c.id) ?? 0;
       const unreadCount =
         lastMessage && new Date(lastMessage.createdAt).getTime() > lastReadAt
@@ -111,11 +111,28 @@ export async function getMessages(conversationId: string, userId: string, cursor
     take,
   });
   const hasMore = messages.length > take - 1;
-  const page = messages.slice(0, take - 1).reverse();
+  const page = messages
+    .slice(0, take - 1)
+    .reverse()
+    .map((m) => (m.deletedAt ? { ...m, text: 'Сообщение удалено' } : m));
   return {
     items: page,
     nextCursor: hasMore && page.length > 0 ? page[0].id : null,
   };
+}
+
+export async function deleteMessage(conversationId: string, messageId: string, msgUserId: string) {
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message || message.conversationId !== conversationId) {
+    throw new AppError(errorCodes.NOT_FOUND, 'Сообщение не удалено', 404);
+  }
+  if (message.senderId !== msgUserId) {
+    throw new AppError(errorCodes.FORBIDDEN, 'Удалять можно только свои сообщения', 403);
+  }
+  return prisma.message.update({
+    where: { id: messageId },
+    data: { deletedAt: new Date() },
+  });
 }
 
 export async function markRead(conversationId: string, userId: string): Promise<void> {

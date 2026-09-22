@@ -87,6 +87,7 @@ export interface MessageDto {
   sender?: { id: string; name: string };
   text: string;
   createdAt: string;
+  deletedAt?: string | null;
 }
 
 export interface OrderDto {

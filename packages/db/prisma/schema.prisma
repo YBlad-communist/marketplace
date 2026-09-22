@@ -211,6 +211,7 @@ model Message {
   sender         User         @relation("sender", fields: [senderId], references: [id])
   text           String
   createdAt      DateTime     @default(now())
+  deletedAt      DateTime?
 
   @@index([conversationId, createdAt])
 }

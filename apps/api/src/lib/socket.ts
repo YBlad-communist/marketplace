@@ -12,6 +12,7 @@ import {
   assertParticipant,
   createMessage,
   markRead,
+  deleteMessage,
 } from '../services/conversationService.js';
 
 let io: Server | null = null;
@@ -108,6 +109,20 @@ export function initSocket(httpServer: http.Server): Server {
         });
       } catch {
         // ignore
+      }
+    });
+
+    socket.on('message:delete', async (payload: { conversationId: string; messageId: string }, cb) => {
+      try {
+        await deleteMessage(payload.conversationId, payload.messageId, userId);
+        socket.to(`room:${payload.conversationId}`).emit('message:deleted', {
+          conversationId: payload.conversationId,
+          messageId: payload.messageId,
+        });
+        cb?.({ ok: true });
+      } catch (err) {
+        const e = err as AppError;
+        cb?.({ ok: false, error: e.message ?? 'Не удалось удалить сообщение' });
       }
     });
 

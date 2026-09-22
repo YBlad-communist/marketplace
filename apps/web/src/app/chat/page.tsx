@@ -63,12 +63,24 @@ function ChatContent() {
     const onTyping = (p: { conversationId: string; isTyping: boolean }) => {
       setTyping((t) => ({ ...t, [p.conversationId]: p.isTyping }));
     };
+    const onMessageDeleted = (p: { conversationId: string; messageId: string }) => {
+      setMessages((m) => ({
+        ...m,
+        [p.conversationId]: (m[p.conversationId] ?? []).map((msg) =>
+          msg.id === p.messageId
+            ? { ...msg, text: 'Сообщение удалено', deletedAt: new Date().toISOString() }
+            : msg
+        ),
+      }));
+    };
 
     socket.on('message:new', onNewMessage);
     socket.on('typing', onTyping);
+    socket.on('message:deleted', onMessageDeleted);
     return () => {
       socket.off('message:new', onNewMessage);
       socket.off('typing', onTyping);
+      socket.off('message:deleted', onMessageDeleted);
     };
   }, [activeId]);
 
@@ -86,6 +98,24 @@ function ChatContent() {
         setMessages((m) => ({ ...m, [activeId]: [...(m[activeId] ?? []), res.message!] }));
       } else {
         setText(body.text);
+      }
+    });
+  };
+
+  const deleteMessage = (messageId: string) => {
+    if (!activeId) return;
+    if (!confirm('Удалить сообщение?')) return;
+    const socket = connectSocket();
+    socket.emit('message:delete', { conversationId: activeId, messageId }, (res: { ok: boolean }) => {
+      if (res.ok) {
+        setMessages((m) => ({
+          ...m,
+          [activeId]: (m[activeId] ?? []).map((msg) =>
+            msg.id === messageId
+              ? { ...msg, text: 'Сообщение удалено', deletedAt: new Date().toISOString() }
+              : msg
+          ),
+        }));
       }
     });
   };
@@ -181,7 +211,7 @@ function ChatContent() {
                         </div>
                       )}
                       {!mine && !showHeader && <div className="w-8 shrink-0" />}
-                      <div className={cn('flex max-w-[70%] flex-col', mine ? 'items-end' : 'items-start')}>
+                      <div className={cn('group relative flex max-w-[70%] flex-col', mine ? 'items-end' : 'items-start')}>
                         {!mine && showHeader && (
                           <div className="mb-0.5 px-1 text-xs font-medium text-gray-500">{name}</div>
                         )}
@@ -190,7 +220,8 @@ function ChatContent() {
                             'break-words rounded-2xl px-3 py-2 text-sm shadow-sm',
                             mine
                               ? 'rounded-br-md bg-brand-600 text-white'
-                              : 'rounded-bl-md border border-gray-100 bg-white text-gray-800'
+                              : 'rounded-bl-md border border-gray-100 bg-white text-gray-800',
+                            m.deletedAt && 'italic opacity-60'
                           )}
                         >
                           {m.text}
@@ -203,6 +234,16 @@ function ChatContent() {
                             {formatDateTime(m.createdAt)}
                           </div>
                         </div>
+                        {mine && !m.deletedAt && (
+                          <button
+                            type="button"
+                            onClick={() => deleteMessage(m.id)}
+                            className="absolute -left-6 top-1 hidden text-xs text-gray-400 hover:text-red-600 group-hover:block"
+                            aria-label="Удалить сообщение"
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
