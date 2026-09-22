@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
+import { ReviewForm } from '@/components/ReviewForm';
 import { get, post } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { OrderDto } from '@/lib/types';
@@ -23,12 +25,17 @@ function OrderRow({
   role,
   onRelease,
   onRefund,
+  onReviewed,
 }: {
   order: OrderDto;
   role: 'buyer' | 'seller';
   onRelease: (id: string) => void;
   onRefund: (id: string) => void;
+  onReviewed: () => void;
 }) {
+  const [reviewing, setReviewing] = useState(false);
+  const counterpartyId = role === 'buyer' ? order.listing?.seller?.id : order.buyer?.id;
+
   return (
     <div className="card flex flex-wrap items-center gap-4 p-4">
       <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-gray-100">
@@ -69,12 +76,45 @@ function OrderRow({
             Подтвердить передачу
           </button>
         )}
+        {role === 'buyer' && order.status === 'PENDING' && (
+          <button className="btn-secondary text-xs" onClick={() => onRefund(order.id)}>
+            Отменить заказ
+          </button>
+        )}
         {role === 'buyer' && order.status === 'PAID' && (
           <button className="btn-secondary text-xs" onClick={() => onRefund(order.id)}>
             Запросить возврат
           </button>
         )}
+        {order.status === 'RELEASED' && !order.reviewedByMe && counterpartyId && !reviewing && (
+          <button className="btn-secondary text-xs" onClick={() => setReviewing(true)}>
+            Оставить отзыв
+          </button>
+        )}
+        {order.status === 'RELEASED' && order.reviewedByMe && (
+          <span className="muted text-xs">Отзыв оставлен</span>
+        )}
       </div>
+      {reviewing && counterpartyId && (
+        <div className="w-full">
+          <ReviewForm
+            orderId={order.id}
+            revieweeId={counterpartyId}
+            onCancel={() => setReviewing(false)}
+            onDone={() => {
+              setReviewing(false);
+              onReviewed();
+            }}
+          />
+        </div>
+      )}
+      {order.status === 'PAID' && (
+        <p className="basis-full text-xs text-gray-500">
+          {role === 'buyer'
+            ? 'Деньги заблокированы на вашей карте и спишутся только после вашего подтверждения получения.'
+            : 'Деньги заблокированы у покупателя. Вы получите их, когда сделка будет подтверждена.'}
+        </p>
+      )}
     </div>
   );
 }
@@ -125,7 +165,14 @@ export default function OrdersPage() {
         <div className="space-y-3">
           {buyerOrders.length === 0 && <div className="text-sm text-gray-500">Покупок пока нет</div>}
           {buyerOrders.map((o) => (
-            <OrderRow key={o.id} order={o} role="buyer" onRelease={() => undefined} onRefund={(id) => action.mutate({ id, type: 'refund' })} />
+            <OrderRow
+              key={o.id}
+              order={o}
+              role="buyer"
+              onRelease={() => undefined}
+              onRefund={(id) => action.mutate({ id, type: 'refund' })}
+              onReviewed={() => queryClient.invalidateQueries({ queryKey: ['orders'] })}
+            />
           ))}
         </div>
 
@@ -136,7 +183,14 @@ export default function OrdersPage() {
         <div className="space-y-3">
           {sellerOrders.length === 0 && <div className="text-sm text-gray-500">Продаж пока нет</div>}
           {sellerOrders.map((o) => (
-            <OrderRow key={o.id} order={o} role="seller" onRelease={(id) => action.mutate({ id, type: 'release' })} onRefund={() => undefined} />
+            <OrderRow
+              key={o.id}
+              order={o}
+              role="seller"
+              onRelease={(id) => action.mutate({ id, type: 'release' })}
+              onRefund={() => undefined}
+              onReviewed={() => queryClient.invalidateQueries({ queryKey: ['orders'] })}
+            />
           ))}
         </div>
       </main>

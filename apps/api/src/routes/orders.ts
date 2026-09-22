@@ -54,10 +54,25 @@ router.get('/', authenticate, async (req, res, next) => {
       take: 100,
       include: { listing: { include: { images: { take: 1, orderBy: { position: 'asc' as const } } } }, buyer: { select: { id: true, name: true } } },
     });
+
+    // Для RELEASED-заказов проверяем, оставил ли текущий пользователь отзыв —
+    // фронт не должен показывать кнопку "Оставить отзыв" там, где отзыв уже есть
+    // (иначе упрёмся в 409 от unique-констрейнта без объяснения пользователю).
+    const releasedIds = [...buyerOrders, ...sellerOrders]
+      .filter((o) => o.status === 'RELEASED')
+      .map((o) => o.id);
+    const myReviews = releasedIds.length
+      ? await prisma.review.findMany({
+          where: { authorId: req.userId!, orderId: { in: releasedIds } },
+          select: { orderId: true },
+        })
+      : [];
+    const reviewedSet = new Set(myReviews.map((r) => r.orderId));
+
     res.json({
       data: {
-        buyerOrders: buyerOrders.map((o) => ({ ...o, amount: Number(o.amount) })),
-        sellerOrders: sellerOrders.map((o) => ({ ...o, amount: Number(o.amount) })),
+        buyerOrders: buyerOrders.map((o) => ({ ...o, amount: Number(o.amount), reviewedByMe: reviewedSet.has(o.id) })),
+        sellerOrders: sellerOrders.map((o) => ({ ...o, amount: Number(o.amount), reviewedByMe: reviewedSet.has(o.id) })),
       },
     });
   } catch (err) {
@@ -86,7 +101,10 @@ router.get('/:id', authenticate, async (req, res, next) => {
     if (!isBuyer && !isSeller && !isStaff) {
       throw new AppError(errorCodes.FORBIDDEN, 'Нет доступа к заказу', 403);
     }
-    res.json({ data: { order: { ...order, amount: Number(order.amount) } } });
+    const reviewed = order.status === 'RELEASED'
+      ? await prisma.review.findFirst({ where: { authorId: req.userId!, orderId: order.id } })
+      : null;
+    res.json({ data: { order: { ...order, amount: Number(order.amount), reviewedByMe: Boolean(reviewed) } } });
   } catch (err) {
     next(err);
   }

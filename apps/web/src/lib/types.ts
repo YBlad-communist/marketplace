@@ -99,6 +99,7 @@ export interface OrderDto {
   createdAt: string;
   listing?: ListingDto;
   buyer?: { id: string; name: string };
+  reviewedByMe: boolean;
 }
 
 export interface SessionDto {
