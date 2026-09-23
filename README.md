@@ -1,4 +1,4 @@
-# Marketplace — доска объявлений (Avito-like)
+# РынокRU — доска объявлений (Avito-like)
 
 Full-stack: **Next.js 14 (web) + Express (api) + BullMQ worker + PostgreSQL + Redis + MinIO (S3) + ЮKassa (эскроу, сплитование платежей)**. Монорепо на pnpm.
 

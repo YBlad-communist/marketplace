@@ -6,10 +6,10 @@ export function Footer() {
       <div className="container-x flex flex-col gap-4 py-6 text-sm text-textSecondary sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-accent text-xs font-bold text-white" aria-hidden>
-            M
+            Р
           </span>
           <span>
-            <strong className="font-semibold text-textPrimary">Marketplace</strong> — безопасные сделки с эскроу
+            <strong className="font-semibold text-textPrimary">РынокRU</strong> — безопасные сделки с эскроу
           </span>
         </div>
         <nav className="flex flex-wrap gap-x-4 gap-y-1" aria-label="Навигация в подвале">

@@ -11,7 +11,7 @@ import { ToastProvider } from '@/components/ui/Toast';
 const inter = Inter({ subsets: ['latin', 'cyrillic'], variable: '--font-inter', display: 'swap' });
 
 export const metadata: Metadata = {
-  title: 'Marketplace — доска объявлений',
+  title: 'РынокRU — доска объявлений',
   description: 'Покупайте и продавайте. Безопасные сделки с эскроу.',
 };
 

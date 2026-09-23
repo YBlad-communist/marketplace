@@ -1,4 +1,4 @@
-"""Полный локальный запуск marketplace одной командой::
+"""Полный локальный запуск РынокRU одной командой::
 
     python start.py
 
@@ -181,7 +181,7 @@ def main(argv):
         log("миграции пропущены (--no-migrate)")
 
     print("", flush=True)
-    print("  Marketplace запускается:", flush=True)
+    print("  РынокRU запускается:", flush=True)
     print("    сайт          %s" % WEB_URL, flush=True)
     print("    API           %s" % API_URL, flush=True)
     print("    MinIO консоль %s" % MINIO_CONSOLE, flush=True)

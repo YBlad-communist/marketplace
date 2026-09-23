@@ -43,10 +43,10 @@ export default function LoginPage() {
       <main className="mx-auto flex max-w-md flex-col px-4 py-16">
         <div className="mb-6 flex flex-col items-center text-center">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-2xl font-bold text-white" aria-hidden>
-            M
+            Р
           </span>
           <h1 className="section-title mt-3">Вход</h1>
-          <p className="muted mt-1">С возвращением на Marketplace</p>
+          <p className="muted mt-1">С возвращением на РынокRU</p>
         </div>
         <form onSubmit={submit} className="card space-y-4 p-6">
           <div>

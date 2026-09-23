@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('home page loads with catalog', async ({ page }) => {
   await page.goto('/');
-  await expect(page).toHaveTitle(/Marketplace|Маркет/i);
+  await expect(page).toHaveTitle(/РынокRU|Рынок/i);
   await expect(page.locator('body')).toContainText(/объявлени|каталог|поиск/i);
 });
 

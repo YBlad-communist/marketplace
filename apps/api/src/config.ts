@@ -82,7 +82,7 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true'),
-  MAIL_FROM: z.string().default('Marketplace <no-reply@localhost>'),
+  MAIL_FROM: z.string().default('РынокRU <no-reply@localhost>'),
 
   RATE_LIMIT_ENABLED: z
     .string()
