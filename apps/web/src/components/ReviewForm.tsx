@@ -9,7 +9,8 @@ export function ReviewForm({
   onDone,
   onCancel,
 }: {
-  orderId: string;
+  // orderId опционален: отзыв с профиля продавца — без привязки к сделке.
+  orderId?: string;
   revieweeId: string;
   onDone: () => void;
   onCancel: () => void;

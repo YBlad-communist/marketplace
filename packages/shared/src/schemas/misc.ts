@@ -12,9 +12,10 @@ export const sellerYookassaConnectSchema = z.object({
 
 export const reviewCreateSchema = z.object({
   revieweeId: z.string().cuid(),
-  // Отзыв возможен только по завершённой сделке: revieweeId обязан совпадать
+  // orderId опционален: отзыв можно оставить с профиля продавца без сделки
+  // (свободный отзыв). Отзыв по сделке — с orderId, revieweeId обязан совпадать
   // с контрагентом из заказа (проверяется в хендлере), иначе это накрутка.
-  orderId: z.string().cuid(),
+  orderId: z.string().cuid().optional(),
   rating: z.number().int().min(1).max(5),
   text: z.string().trim().min(1).max(2000).optional(),
 });
@@ -59,6 +60,11 @@ export const avatarConfirmSchema = z.object({
   key: z.string().min(1).max(500),
 });
 
+export const deleteAccountSchema = z.object({
+  // Полное физическое удаление аккаунта. Подтверждение паролем обязательно.
+  password: z.string().min(1, 'Введите пароль для подтверждения'),
+});
+
 export const usersMeUpdateSchema = z
   .object({
     name: z.string().trim().min(2).max(80).optional(),
@@ -78,3 +84,4 @@ export type ReviewCreateInput = z.infer<typeof reviewCreateSchema>;
 export type ReportCreateInput = z.infer<typeof reportCreateSchema>;
 export type UsersMeUpdateInput = z.infer<typeof usersMeUpdateSchema>;
 export type AvatarConfirmInput = z.infer<typeof avatarConfirmSchema>;
+export type DeleteAccountInput = z.infer<typeof deleteAccountSchema>;

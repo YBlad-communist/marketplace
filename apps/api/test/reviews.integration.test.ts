@@ -135,8 +135,7 @@ describeInfra('reviews (integration): целостность рейтинга', 
     expect(res.body.error.code).toBe('CONFLICT');
   });
 
-  it('анти-накрутка: второй отзыв той же пары за окно -> 409', async () => {
-    // Сначала по этой паре уже есть один успешный отзыв (первый тест):
+  it('анти-накрутка: второй отзыв той же пары за окно -> 409', async () => {    // Сначала по этой паре уже есть один успешный отзыв (первый тест):
     // REVIEW_PAIR_LIMIT=1, поэтому новая сделка той же пары отклоняется.
     const orderId = await createOrderAndPay(pairListingId, 'pair');
     await releaseOrder(orderId);
@@ -152,5 +151,28 @@ describeInfra('reviews (integration): целостность рейтинга', 
       where: { authorId: buyerId, revieweeId: sellerId },
     });
     expect(pairReviews).toBeGreaterThanOrEqual(1);
+  });
+
+  it('свободный отзыв с профиля (без orderId) -> 201, повторный -> 409', async () => {
+    const first = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ revieweeId: sellerId, rating: 5, text: 'Хороший продавец' });
+    expect(first.status).toBe(201);
+    expect(first.body.data.review.orderId).toBeNull();
+
+    const dup = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ revieweeId: sellerId, rating: 4, text: 'Второй отзыв без сделки' });
+    expect(dup.status).toBe(409);
+  });
+
+  it('отклоняет отзыв самому себе без сделки -> 400', async () => {
+    const res = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ revieweeId: buyerId, rating: 5, text: 'Сам себе' });
+    expect(res.status).toBe(400);
   });
 });

@@ -1,10 +1,13 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
 import { ListingCard } from '@/components/ListingCard';
+import { ReviewForm } from '@/components/ReviewForm';
 import { get } from '@/lib/api';
+import { useAuthStore } from '@/lib/auth-store';
 import { CursorPage, ListingDto } from '@/lib/types';
 import { formatDate, formatDateTime } from '@/lib/format';
 
@@ -41,6 +44,9 @@ function Stars({ value }: { value: number }) {
 export default function UserProfilePage() {
   const params = useParams<{ id: string }>();
   const userId = params.id;
+  const queryClient = useQueryClient();
+  const meId = useAuthStore((s) => s.user?.id);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   const userQuery = useQuery({
     queryKey: ['user', userId],
@@ -90,6 +96,25 @@ export default function UserProfilePage() {
                     {user.rating.toFixed(1)} ({user.ratingCount} отзывов)
                   </span>
                 </div>
+                {meId && meId !== userId && (
+                  <div className="mt-3">
+                    {!reviewOpen ? (
+                      <button type="button" className="btn-secondary text-xs" onClick={() => setReviewOpen(true)}>
+                        Оставить отзыв
+                      </button>
+                    ) : (
+                      <ReviewForm
+                        revieweeId={userId}
+                        onCancel={() => setReviewOpen(false)}
+                        onDone={() => {
+                          setReviewOpen(false);
+                          void queryClient.invalidateQueries({ queryKey: ['user-reviews', userId] });
+                          void queryClient.invalidateQueries({ queryKey: ['user', userId] });
+                        }}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
