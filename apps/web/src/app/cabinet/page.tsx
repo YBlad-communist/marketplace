@@ -7,7 +7,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
 import { ProfileEditForm } from '@/components/ProfileEditForm';
 import { VerifyPhoneButton } from '@/components/VerifyPhoneButton';
-import { del, get } from '@/lib/api';
+import { del, get, post, setAccessToken, ApiError } from '@/lib/api';
+import { disconnectSocket } from '@/lib/socket';
 import { useAuthStore } from '@/lib/auth-store';
 import { CursorPage, ListingDto } from '@/lib/types';
 import { formatPrice } from '@/lib/format';
@@ -15,7 +16,12 @@ import { formatPrice } from '@/lib/format';
 export default function CabinetPage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
   const [editingProfile, setEditingProfile] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [statusFilter, setStatusFilter] = useState<
     'ALL' | 'ACTIVE' | 'RESERVED' | 'SOLD' | 'PENDING' | 'REJECTED' | 'ARCHIVED'
@@ -33,6 +39,28 @@ export default function CabinetPage() {
   const remove = async (id: string) => {
     await del(`/api/listings/${id}`);
     router.refresh();
+  };
+
+  const deleteAccount = async () => {
+    if (!deletePassword) {
+      setDeleteError('Введите пароль для подтверждения');
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await del('/api/users/me', { password: deletePassword });
+      await post('/api/auth/logout').catch(() => undefined);
+      setAccessToken(null);
+      disconnectSocket();
+      setUser(null);
+      router.push('/');
+      router.refresh();
+    } catch (err) {
+      setDeleteError(err instanceof ApiError ? err.message : 'Не удалось удалить аккаунт');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (!user) {
@@ -167,6 +195,51 @@ export default function CabinetPage() {
               <Link href="/listings/new" className="text-brand-600">
                 Разместить первое
               </Link>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-10 rounded-2xl border border-red-200 bg-red-50 p-5">
+          <h2 className="text-base font-semibold text-red-800">Опасная зона</h2>
+          <p className="mt-1 text-sm text-red-700">
+            Удаление аккаунта необратимо: объявления, сообщения, отзывы и файлы будут удалены безвозвратно.
+            При активных заказах удаление недоступно.
+          </p>
+          {!deleteOpen ? (
+            <button type="button" className="btn-danger mt-3 text-xs" onClick={() => setDeleteOpen(true)}>
+              Удалить аккаунт
+            </button>
+          ) : (
+            <div className="mt-3 max-w-sm">
+              <label className="label" htmlFor="delete-password">
+                Подтвердите паролем
+              </label>
+              <input
+                id="delete-password"
+                type="password"
+                className="input"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                autoComplete="current-password"
+              />
+              {deleteError && <p className="mt-2 text-sm text-red-600">{deleteError}</p>}
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  disabled={deleting}
+                  onClick={() => {
+                    setDeleteOpen(false);
+                    setDeletePassword('');
+                    setDeleteError(null);
+                  }}
+                >
+                  Отмена
+                </button>
+                <button type="button" className="btn-danger text-xs" disabled={deleting} onClick={deleteAccount}>
+                  {deleting ? 'Удаление…' : 'Удалить безвозвратно'}
+                </button>
+              </div>
             </div>
           )}
         </div>

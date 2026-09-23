@@ -5,12 +5,15 @@ import {
   phoneChangeRequestSchema,
   phoneChangeConfirmSchema,
   avatarConfirmSchema,
+  deleteAccountSchema,
   AppError,
   errorCodes,
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
+import { refreshCookieName, clearRefreshCookieOptions } from '../lib/cookies.js';
 import { publicUser } from '../services/authService.js';
+import { deleteAccount } from '../services/accountService.js';
 import { assertOtpSendAllowed, createVerificationCode, verifyCode } from '../services/verificationService.js';
 import { enqueueSms } from '../services/notificationService.js';
 import { deleteObject, verifyImageObject } from '../lib/s3.js';
@@ -102,8 +105,17 @@ router.post('/me/avatar/confirm', authenticate, validate(avatarConfirmSchema), a
   }
 });
 
-router.get('/:id', async (req, res, next) => {
+router.delete('/me', authenticate, validate(deleteAccountSchema), async (req, res, next) => {
   try {
+    await deleteAccount(req.userId!, req.body.password);
+    res.clearCookie(refreshCookieName, clearRefreshCookieOptions);
+    res.json({ data: { success: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/:id', async (req, res, next) => {  try {
     const user = await prisma.user.findUnique({
       where: { id: req.params.id },
       select: {
