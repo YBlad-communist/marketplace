@@ -105,10 +105,10 @@ export function ImageUploader({
       <button type="button" className="btn-secondary" onClick={() => inputRef.current?.click()}>
         Добавить фото
       </button>
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
       <div className="mt-3 grid grid-cols-4 gap-3">
         {pending.map((p, i) => (
-          <div key={`${p.localUrl}-${i}`} className="relative aspect-square overflow-hidden rounded-lg bg-gray-100">
+          <div key={`${p.localUrl}-${i}`} className="relative aspect-square overflow-hidden rounded-lg bg-surfaceMuted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={p.localUrl} alt="" className="h-full w-full object-cover" />
             {p.status === 'uploading' && (

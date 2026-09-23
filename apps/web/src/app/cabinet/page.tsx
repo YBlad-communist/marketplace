@@ -12,6 +12,7 @@ import { disconnectSocket } from '@/lib/socket';
 import { useAuthStore } from '@/lib/auth-store';
 import { CursorPage, ListingDto } from '@/lib/types';
 import { formatPrice } from '@/lib/format';
+import { EmptyState, Tabs } from '@/components/ui/primitives';
 
 export default function CabinetPage() {
   const router = useRouter();
@@ -22,6 +23,7 @@ export default function CabinetPage() {
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [cabTab, setCabTab] = useState('listings');
 
   const [statusFilter, setStatusFilter] = useState<
     'ALL' | 'ACTIVE' | 'RESERVED' | 'SOLD' | 'PENDING' | 'REJECTED' | 'ARCHIVED'
@@ -67,11 +69,11 @@ export default function CabinetPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-8">
+        <main className="container-x py-8">
           <h1 className="mb-4 text-2xl font-bold">Личный кабинет</h1>
-          <p className="text-gray-500">
+          <p className="text-textSecondary">
             Войдите, чтобы увидеть профиль.{' '}
-            <Link href="/login" className="text-brand-600">
+            <Link href="/login" className="text-accent">
               Войти
             </Link>
           </p>
@@ -83,7 +85,7 @@ export default function CabinetPage() {
   return (
     <div>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8">
+      <main className="container-x py-8">
         <h1 className="section-title mb-6">Личный кабинет</h1>
 
         <div className="card mb-8 p-5">
@@ -92,7 +94,7 @@ export default function CabinetPage() {
           ) : (
             <div className="flex flex-wrap items-center gap-4">
               <div
-                className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-brand-600 text-xl font-bold text-white"
+                className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent text-xl font-bold text-white"
                 aria-hidden
               >
                 {user?.avatarUrl ? (
@@ -104,8 +106,8 @@ export default function CabinetPage() {
               </div>
               <div>
                 <div className="font-semibold">{user?.name}</div>
-                <div className="text-sm text-gray-600">{user?.email}</div>
-                {user?.phone && <div className="text-sm text-gray-600">{user.phone}</div>}
+                <div className="text-sm text-textSecondary">{user?.email}</div>
+                {user?.phone && <div className="text-sm text-textSecondary">{user.phone}</div>}
                 <VerifyPhoneButton />
               </div>
               <div className="muted">
@@ -129,14 +131,25 @@ export default function CabinetPage() {
           )}
         </div>
 
-        <h2 className="mb-4 text-lg font-semibold">Мои объявления</h2>
+        <Tabs
+          tabs={[
+            { id: 'listings', label: 'Мои объявления' },
+            { id: 'settings', label: 'Настройки' },
+          ]}
+          value={cabTab}
+          onChange={setCabTab}
+          ariaLabel="Разделы кабинета"
+        />
+
+        {cabTab === 'listings' ? (
+        <div role="tabpanel" className="pt-4">
         <div className="mb-4 flex flex-wrap gap-2">
           {(['ALL', 'ACTIVE', 'RESERVED', 'SOLD', 'PENDING', 'REJECTED', 'ARCHIVED'] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setStatusFilter(s)}
-              className={`rounded-full px-3 py-1 text-xs ${statusFilter === s ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+              className={`rounded-full px-3 py-1 text-xs ${statusFilter === s ? 'bg-accent text-white' : 'bg-surfaceMuted text-textSecondary'}`}
             >
               {
                 {
@@ -165,17 +178,17 @@ export default function CabinetPage() {
             ))}
           {myListingsQuery.data?.data.items.map((l) => (
             <div key={l.id} className="card flex items-center gap-4 p-4">
-              <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-gray-100">
+              <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-surfaceMuted">
                 {l.images[0] ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={l.images[0].thumbUrl ?? l.images[0].url} alt="" className="h-full w-full object-cover" />
                 ) : null}
               </div>
               <div className="min-w-0 flex-1">
-                <Link href={`/listings/${l.id}`} className="block truncate font-medium hover:text-brand-600">
+                <Link href={`/listings/${l.id}`} className="block truncate font-medium hover:text-accent">
                   {l.title}
                 </Link>
-                <div className="text-sm text-gray-500">
+                <div className="text-sm text-textSecondary">
                   {formatPrice(l.price, l.currency)} · {l.viewsCount} просмотров · {l.status}
                 </div>
               </div>
@@ -190,18 +203,32 @@ export default function CabinetPage() {
             </div>
           ))}
           {myListingsQuery.data?.data.items.length === 0 && (
-            <div className="text-gray-500">
-              Объявлений нет.{' '}
-              <Link href="/listings/new" className="text-brand-600">
-                Разместить первое
-              </Link>
-            </div>
+            <EmptyState
+              title="Объявлений нет"
+              action={
+                <Link href="/listings/new" className="btn-primary text-xs">
+                  Разместить первое
+                </Link>
+              }
+            />
           )}
         </div>
+        </div>
+        ) : (
+        <div role="tabpanel" className="space-y-4 pt-4">
+          <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
+            <div>
+              <div className="font-medium">Активные сессии</div>
+              <p className="muted mt-0.5">Устройства, где вы вошли в аккаунт</p>
+            </div>
+            <Link href="/cabinet/sessions" className="btn-secondary text-xs">
+              Управление сессиями
+            </Link>
+          </div>
 
-        <div className="mt-10 rounded-2xl border border-red-200 bg-red-50 p-5">
-          <h2 className="text-base font-semibold text-red-800">Опасная зона</h2>
-          <p className="mt-1 text-sm text-red-700">
+        <div className="rounded-2xl border border-danger/20 bg-danger/5 p-5">
+          <h2 className="text-base font-semibold text-danger">Опасная зона</h2>
+          <p className="mt-1 text-sm text-danger">
             Удаление аккаунта необратимо: объявления, сообщения, отзывы и файлы будут удалены безвозвратно.
             При активных заказах удаление недоступно.
           </p>
@@ -222,7 +249,7 @@ export default function CabinetPage() {
                 onChange={(e) => setDeletePassword(e.target.value)}
                 autoComplete="current-password"
               />
-              {deleteError && <p className="mt-2 text-sm text-red-600">{deleteError}</p>}
+              {deleteError && <p className="mt-2 text-sm text-danger">{deleteError}</p>}
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
@@ -243,6 +270,8 @@ export default function CabinetPage() {
             </div>
           )}
         </div>
+        </div>
+        )}
       </main>
     </div>
   );

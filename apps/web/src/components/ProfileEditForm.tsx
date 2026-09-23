@@ -59,7 +59,7 @@ export function ProfileEditForm({ onClose }: { onClose: () => void }) {
   return (
     <div className="card space-y-4 p-5">
       <div className="flex items-center gap-4">
-        <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-brand-600 text-xl font-bold text-white">
+        <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent text-xl font-bold text-white">
           {user?.avatarUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
@@ -102,7 +102,7 @@ export function ProfileEditForm({ onClose }: { onClose: () => void }) {
             <span className="text-sm">{user?.phone}</span>
             <button
               type="button"
-              className="text-xs text-brand-600 hover:underline"
+              className="text-xs text-accent hover:underline"
               onClick={() => setChangingPhone(true)}
             >
               Изменить
@@ -113,7 +113,7 @@ export function ProfileEditForm({ onClose }: { onClose: () => void }) {
         )}
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
 
       <div className="flex gap-2">
         <button type="button" className="btn-secondary text-xs" onClick={onClose}>

@@ -34,7 +34,7 @@ function Stars({ value }: { value: number }) {
   return (
     <div className="text-sm font-bold text-amber-700" aria-label={`Рейтинг ${value.toFixed(1)} из 5`}>
       {'★'.repeat(Math.round(value))}
-      <span className="text-gray-300" aria-hidden="true">
+      <span className="text-border" aria-hidden="true">
         {'★'.repeat(5 - Math.round(value))}
       </span>
     </div>
@@ -68,8 +68,8 @@ export default function UserProfilePage() {
   return (
     <div>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8">
-        {userQuery.isLoading && <div className="text-center text-gray-500">Загрузка…</div>}
+      <main className="container-x py-8">
+        {userQuery.isLoading && <div className="text-center text-textSecondary">Загрузка…</div>}
 
         {user && (
           <div className="card mb-8 p-6">
@@ -78,21 +78,21 @@ export default function UserProfilePage() {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={user.avatarUrl} alt="" className="h-16 w-16 rounded-full object-cover" />
               ) : (
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gray-200 text-xl font-bold">
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-surfaceMuted text-xl font-bold">
                   {user.name[0]}
                 </div>
               )}
               <div>
                 <h1 className="text-xl font-bold">
                   {user.name}
-                  {user.isVerified && <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">подтверждён</span>}
+                  {user.isVerified && <span className="ml-2 rounded-full bg-info/10 px-2 py-0.5 text-xs text-sky-800">подтверждён</span>}
                 </h1>
-                <div className="text-sm text-gray-500">
+                <div className="text-sm text-textSecondary">
                   {user.city ?? 'Город не указан'} · на сайте с {formatDate(user.createdAt)}
                 </div>
                 <div className="mt-1 flex items-center gap-2">
                   <Stars value={user.rating} />
-                  <span className="text-sm text-gray-500">
+                  <span className="text-sm text-textSecondary">
                     {user.rating.toFixed(1)} ({user.ratingCount} отзывов)
                   </span>
                 </div>
@@ -127,7 +127,7 @@ export default function UserProfilePage() {
           ))}
         </div>
         {!listingsQuery.isLoading && (listingsQuery.data?.data.items ?? []).length === 0 && (
-          <div className="text-gray-500">Активных объявлений нет</div>
+          <div className="text-textSecondary">Активных объявлений нет</div>
         )}
 
         <h2 className="mb-4 mt-10 text-lg font-semibold">Отзывы</h2>
@@ -137,13 +137,13 @@ export default function UserProfilePage() {
               <div className="flex items-center gap-2">
                 <span className="font-medium">{r.author.name}</span>
                 <Stars value={r.rating} />
-                <span className="ml-auto text-xs text-gray-400">{formatDateTime(r.createdAt)}</span>
+                <span className="ml-auto text-xs text-textMuted">{formatDateTime(r.createdAt)}</span>
               </div>
-              {r.text && <p className="mt-2 text-sm text-gray-700">{r.text}</p>}
+              {r.text && <p className="mt-2 text-sm text-textPrimary">{r.text}</p>}
             </div>
           ))}
           {!reviewsQuery.isLoading && (reviewsQuery.data?.data.items ?? []).length === 0 && (
-            <div className="text-sm text-gray-500">Отзывов пока нет</div>
+            <div className="text-sm text-textSecondary">Отзывов пока нет</div>
           )}
         </div>
       </main>

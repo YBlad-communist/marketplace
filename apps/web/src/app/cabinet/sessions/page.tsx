@@ -53,11 +53,11 @@ export default function SessionsPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-8">
+        <main className="container-x py-8">
           <h1 className="mb-4 text-2xl font-bold">Активные сессии</h1>
-          <p className="text-gray-500">
+          <p className="text-textSecondary">
             Войдите, чтобы управлять сессиями.{' '}
-            <Link href="/login" className="text-brand-600">
+            <Link href="/login" className="text-accent">
               Войти
             </Link>
           </p>
@@ -71,7 +71,7 @@ export default function SessionsPage() {
   return (
     <div>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8">
+      <main className="container-x py-8">
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl font-bold">Активные сессии</h1>
           <Link href="/cabinet" className="btn-secondary text-xs">
@@ -79,12 +79,12 @@ export default function SessionsPage() {
           </Link>
         </div>
 
-        <p className="mb-6 text-sm text-gray-500">
+        <p className="mb-6 text-sm text-textSecondary">
           Здесь отображаются устройства и браузеры, вошедшие в аккаунт. Завершайте незнакомые сессии, чтобы обезопасить
           аккаунт.
         </p>
 
-        {error && <div className="card mb-4 border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {error && <div className="card mb-4 border-danger/20 bg-danger/5 p-3 text-sm text-danger">{error}</div>}
 
         <div className="space-y-3">
           {sessionsQuery.isLoading &&
@@ -92,7 +92,7 @@ export default function SessionsPage() {
           {sessions.map((s) => (
             <div key={s.familyId} className="card flex flex-wrap items-center gap-4 p-4">
               <div
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gray-100 text-brand-700"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surfaceMuted text-accentHover"
                 aria-hidden
               >
                 ⌘
@@ -102,7 +102,7 @@ export default function SessionsPage() {
                   <span className="font-medium">{parseDevice(s.userAgent)}</span>
                   {s.current && <span className="badge-green">Текущая сессия</span>}
                 </div>
-                <div className="mt-0.5 text-sm text-gray-500">
+                <div className="mt-0.5 text-sm text-textSecondary">
                   IP: {s.ip ?? '—'} · Активна с {formatDateTime(s.createdAt)} · До {formatDateTime(s.expiresAt)}
                 </div>
               </div>
@@ -118,7 +118,7 @@ export default function SessionsPage() {
             </div>
           ))}
           {!sessionsQuery.isLoading && sessions.length === 0 && (
-            <div className="text-gray-500">Активных сессий нет.</div>
+            <div className="text-textSecondary">Активных сессий нет.</div>
           )}
         </div>
       </main>

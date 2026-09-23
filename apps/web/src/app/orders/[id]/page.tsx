@@ -51,7 +51,7 @@ export default function OrderDetailPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-2xl px-4 py-10 text-gray-500">Загрузка…</main>
+        <main className="mx-auto max-w-2xl px-4 py-10 text-textSecondary">Загрузка…</main>
       </div>
     );
   }
@@ -60,7 +60,7 @@ export default function OrderDetailPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-2xl px-4 py-10 text-gray-500">Заказ не найден</main>
+        <main className="mx-auto max-w-2xl px-4 py-10 text-textSecondary">Заказ не найден</main>
       </div>
     );
   }
@@ -73,12 +73,12 @@ export default function OrderDetailPage() {
     <div>
       <Header />
       <main className="mx-auto max-w-2xl px-4 py-8">
-        <Link href="/orders" className="mb-4 inline-block text-sm text-gray-500 hover:underline">
+        <Link href="/orders" className="mb-4 inline-block text-sm text-textSecondary hover:underline">
           ← Все заказы
         </Link>
         <div className="card p-6">
           <div className="flex items-start gap-4">
-            <div className="h-24 w-24 shrink-0 overflow-hidden rounded-lg bg-gray-100">
+            <div className="h-24 w-24 shrink-0 overflow-hidden rounded-lg bg-surfaceMuted">
               {order.listing?.images?.[0] && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={order.listing.images[0].url} alt="" className="h-full w-full object-cover" />
@@ -86,19 +86,19 @@ export default function OrderDetailPage() {
             </div>
             <div className="flex-1">
               {order.listing && (
-                <Link href={`/listings/${order.listing.id}`} className="text-lg font-semibold hover:text-brand-600">
+                <Link href={`/listings/${order.listing.id}`} className="text-lg font-semibold hover:text-accent">
                   {order.listing.title}
                 </Link>
               )}
               <div className="mt-1 text-xl font-bold">{formatPrice(order.amount, order.currency)}</div>
-              <div className="mt-1 text-sm text-gray-500">Заказ от {formatDateTime(order.createdAt)}</div>
+              <div className="mt-1 text-sm text-textSecondary">Заказ от {formatDateTime(order.createdAt)}</div>
             </div>
           </div>
 
-          <div className="mt-6 rounded-lg bg-gray-50 p-4">
+          <div className="mt-6 rounded-lg bg-surfaceMuted p-4">
             <div className="font-medium">{STATUS_LABEL[order.status]}</div>
             {STATUS_EXPLANATION[order.status] && (
-              <p className="mt-1 text-sm text-gray-600">{STATUS_EXPLANATION[order.status]}</p>
+              <p className="mt-1 text-sm text-textSecondary">{STATUS_EXPLANATION[order.status]}</p>
             )}
           </div>
 

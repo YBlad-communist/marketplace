@@ -92,7 +92,7 @@ export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
         <h3 className="mb-1 text-lg font-semibold">Безопасная сделка</h3>
-        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+        <div className="mb-4 rounded-lg border border-info/20 bg-info/5 p-3 text-sm text-sky-900">
           <p className="font-medium">{formatPrice(price, currency)}</p>
           <p className="mt-1">
             Деньги не переводятся продавцу сразу — они блокируются на вашей карте. Спишутся
@@ -100,8 +100,8 @@ export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
             блокировка снимется автоматически через 7 дней, и деньги останутся у вас.
           </p>
         </div>
-        {status === 'loading' && <p className="text-sm text-gray-500">Подготавливаем оплату…</p>}
-        {status === 'error' && <p className="mb-4 text-sm text-red-600">{error ?? 'Не удалось начать оплату'}</p>}
+        {status === 'loading' && <p className="text-sm text-textSecondary">Подготавливаем оплату…</p>}
+        {status === 'error' && <p className="mb-4 text-sm text-danger">{error ?? 'Не удалось начать оплату'}</p>}
         {status === 'ready' && (
           <div id="yoomoney-checkout" ref={containerRef} className="min-h-[320px]" />
         )}

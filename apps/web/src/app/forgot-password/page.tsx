@@ -64,14 +64,14 @@ export default function ForgotPasswordPage() {
                   onChange={(e) => setPhone(e.target.value)}
                 />
               </div>
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-danger">{error}</p>}
               <button className="btn-primary w-full" onClick={requestCode} disabled={submitting || !phone}>
                 {submitting ? 'Отправка…' : 'Получить код'}
               </button>
             </>
           ) : (
             <>
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-textSecondary">
                 Если номер {phone} зарегистрирован — на него отправлен код подтверждения.
               </p>
               <div>
@@ -102,7 +102,7 @@ export default function ForgotPasswordPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                 />
               </div>
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-danger">{error}</p>}
               <button
                 className="btn-primary w-full"
                 onClick={resetPassword}
@@ -110,14 +110,14 @@ export default function ForgotPasswordPage() {
               >
                 {submitting ? 'Сохранение…' : 'Сохранить новый пароль'}
               </button>
-              <button type="button" className="text-xs text-gray-500 hover:underline" onClick={() => setStep('phone')}>
+              <button type="button" className="text-xs text-textSecondary hover:underline" onClick={() => setStep('phone')}>
                 Изменить номер
               </button>
             </>
           )}
-          <p className="text-center text-xs text-gray-500">
+          <p className="text-center text-xs text-textSecondary">
             Вспомнили пароль?{' '}
-            <Link href="/login" className="text-brand-600">
+            <Link href="/login" className="text-accent">
               Войти
             </Link>
           </p>

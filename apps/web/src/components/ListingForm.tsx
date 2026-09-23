@@ -58,14 +58,14 @@ function attributeInput(
       return (
         <div className="flex items-center gap-3">
           <input
-            className="flex-1 accent-brand-600"
+            className="flex-1 accent-accent"
             type="range"
             min={min}
             max={max}
             value={value === '' ? String(min) : value}
             onChange={(e) => setValue(e.target.value)}
           />
-          <span className="w-20 shrink-0 text-sm text-gray-700">
+          <span className="w-20 shrink-0 text-sm text-textPrimary">
             {value === '' ? min : value}
             {attr.unit ? ` ${attr.unit}` : ''}
           </span>
@@ -183,7 +183,7 @@ export function ListingForm({ mode, initial }: Props) {
       <div>
         <label className="label">Название *</label>
         <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} required />
-        {errors.title && <p className="mt-1 text-xs text-red-600">{errors.title}</p>}
+        {errors.title && <p className="mt-1 text-xs text-danger">{errors.title}</p>}
       </div>
 
       <div>
@@ -194,7 +194,7 @@ export function ListingForm({ mode, initial }: Props) {
           onChange={(e) => setDescription(e.target.value)}
           required
         />
-        {errors.description && <p className="mt-1 text-xs text-red-600">{errors.description}</p>}
+        {errors.description && <p className="mt-1 text-xs text-danger">{errors.description}</p>}
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -209,7 +209,7 @@ export function ListingForm({ mode, initial }: Props) {
             onChange={(e) => setPrice(e.target.value)}
             required
           />
-          {errors.price && <p className="mt-1 text-xs text-red-600">{errors.price}</p>}
+          {errors.price && <p className="mt-1 text-xs text-danger">{errors.price}</p>}
         </div>
         <div>
           <label className="label">Город *</label>
@@ -250,7 +250,7 @@ export function ListingForm({ mode, initial }: Props) {
           </select>
         </div>
       </div>
-      {errors.categoryId && <p className="mt-1 text-xs text-red-600">{errors.categoryId}</p>}
+      {errors.categoryId && <p className="mt-1 text-xs text-danger">{errors.categoryId}</p>}
 
       {attributes.length > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
@@ -273,7 +273,7 @@ export function ListingForm({ mode, initial }: Props) {
         <div>
           <label className="label">Фотографии</label>
           <ImageUploader value={imageKeys} onChange={setImageKeys} onUploadingChange={setUploading} />
-          {errors.imageKeys && <p className="mt-1 text-xs text-red-600">{errors.imageKeys}</p>}
+          {errors.imageKeys && <p className="mt-1 text-xs text-danger">{errors.imageKeys}</p>}
         </div>
       ) : (
         <div>
@@ -282,7 +282,7 @@ export function ListingForm({ mode, initial }: Props) {
         </div>
       )}
 
-      {general && <p className="text-sm text-red-600">{general}</p>}
+      {general && <p className="text-sm text-danger">{general}</p>}
 
       <div className="flex gap-3">
         <button type="button" className="btn-secondary" onClick={() => router.back()}>

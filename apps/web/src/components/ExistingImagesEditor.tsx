@@ -47,13 +47,13 @@ function ExistingImagesEditor({ listingId }: { listingId: string }) {
     }
   };
 
-  if (loading) return <p className="text-sm text-gray-500">Загрузка фото…</p>;
+  if (loading) return <p className="text-sm text-textSecondary">Загрузка фото…</p>;
 
   return (
     <div>
       <div className="grid grid-cols-4 gap-3">
         {images.map((img) => (
-          <div key={img.id} className="relative aspect-square overflow-hidden rounded-lg bg-gray-100">
+          <div key={img.id} className="relative aspect-square overflow-hidden rounded-lg bg-surfaceMuted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={img.thumbUrl ?? img.url} alt="" className="h-full w-full object-cover" />
             <button
@@ -68,7 +68,7 @@ function ExistingImagesEditor({ listingId }: { listingId: string }) {
         ))}
       </div>
       <div className="mt-3">
-        <p className="mb-2 text-sm text-gray-500">Добавить новые фото:</p>
+        <p className="mb-2 text-sm text-textSecondary">Добавить новые фото:</p>
         <ImageUploader value={newKeys} onChange={setNewKeys} onUploadingChange={setUploading} />
         {newKeys.length > 0 && (
           <button type="button" className="btn-secondary mt-2 text-xs" onClick={saveNewImages} disabled={uploading}>
@@ -76,7 +76,7 @@ function ExistingImagesEditor({ listingId }: { listingId: string }) {
           </button>
         )}
       </div>
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
     </div>
   );
 }

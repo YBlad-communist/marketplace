@@ -97,7 +97,7 @@ export default function AdminPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-10 text-center text-gray-500">Нет доступа к модерации</main>
+        <main className="container-x py-10 text-center text-textSecondary">Нет доступа к модерации</main>
       </div>
     );
   }
@@ -111,7 +111,7 @@ export default function AdminPage() {
   return (
     <div>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8">
+      <main className="container-x py-8">
         <h1 className="section-title mb-6">Модерация</h1>
 
         <div className="mb-6 flex gap-2" role="tablist" aria-label="Разделы модерации">
@@ -123,7 +123,7 @@ export default function AdminPage() {
               onClick={() => setTab(t.id)}
               className={cn(
                 'btn-secondary text-xs',
-                tab === t.id && '!border-brand-600 !bg-brand-50 !text-brand-700'
+                tab === t.id && '!border-accent !bg-accentSoft !text-accentHover'
               )}
             >
               {t.label}
@@ -135,7 +135,7 @@ export default function AdminPage() {
           <div className="space-y-3">
             {(pendingQuery.data?.data.listings ?? []).map((l) => (
               <div key={l.id} className="card flex flex-wrap items-center gap-4 p-4">
-                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-gray-100">
+                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-surfaceMuted">
                   {l.images[0] ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={l.images[0].thumbUrl ?? l.images[0].url} alt="" className="h-full w-full object-cover" />
@@ -143,8 +143,8 @@ export default function AdminPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">{l.title}</div>
-                  <div className="truncate text-sm text-gray-500">{l.description}</div>
-                  <div className="text-xs text-gray-400">
+                  <div className="truncate text-sm text-textSecondary">{l.description}</div>
+                  <div className="text-xs text-textMuted">
                     {l.city} · {formatPrice(l.price, l.currency)} · {l.seller.name} · {formatDate(l.createdAt)}
                   </div>
                 </div>
@@ -171,7 +171,7 @@ export default function AdminPage() {
               </div>
             ))}
             {!pendingQuery.isLoading && (pendingQuery.data?.data.listings ?? []).length === 0 && (
-              <div className="text-sm text-gray-500">Нет объявлений на модерации</div>
+              <div className="text-sm text-textSecondary">Нет объявлений на модерации</div>
             )}
           </div>
         )}
@@ -184,9 +184,9 @@ export default function AdminPage() {
                   <div className="text-sm font-medium">
                     Жалоба от {r.author.name} на {r.targetType.toLowerCase()}
                   </div>
-                  <div className="text-sm text-gray-500">Причина: {r.reason}</div>
-                  {r.comment && <div className="text-xs text-gray-400">Комментарий: {r.comment}</div>}
-                  <div className="mt-1 text-xs text-gray-400">{formatDateTime(r.createdAt)}</div>
+                  <div className="text-sm text-textSecondary">Причина: {r.reason}</div>
+                  {r.comment && <div className="text-xs text-textMuted">Комментарий: {r.comment}</div>}
+                  <div className="mt-1 text-xs text-textMuted">{formatDateTime(r.createdAt)}</div>
                 </div>
                 <div className="flex gap-2">
                   {r.targetType === 'LISTING' && (
@@ -204,7 +204,7 @@ export default function AdminPage() {
               </div>
             ))}
             {!reportsQuery.isLoading && (reportsQuery.data?.data.reports ?? []).length === 0 && (
-              <div className="text-sm text-gray-500">Нет новых жалоб</div>
+              <div className="text-sm text-textSecondary">Нет новых жалоб</div>
             )}
           </div>
         )}
@@ -215,8 +215,8 @@ export default function AdminPage() {
               <div key={u.id} className="card flex flex-wrap items-center gap-4 p-4">
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">{u.name}</div>
-                  <div className="text-sm text-gray-500">{u.email}</div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-sm text-textSecondary">{u.email}</div>
+                  <div className="text-xs text-textMuted">
                     {u.role} · {u.isVerified ? 'подтверждён' : 'не подтверждён'} · {formatDate(u.createdAt)}
                   </div>
                 </div>

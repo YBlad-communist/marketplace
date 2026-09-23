@@ -34,7 +34,7 @@ export function ReviewForm({
   };
 
   return (
-    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-4">
+    <div className="mt-3 rounded-lg border border-border bg-surfaceMuted p-4">
       <div className="mb-2 flex gap-1" role="radiogroup" aria-label="Оценка">
         {[1, 2, 3, 4, 5].map((n) => (
           <button
@@ -43,7 +43,7 @@ export function ReviewForm({
             aria-label={`${n} из 5`}
             aria-pressed={rating === n}
             onClick={() => setRating(n)}
-            className={`text-2xl leading-none ${n <= rating ? 'text-amber-500' : 'text-gray-300'}`}
+            className={`text-2xl leading-none ${n <= rating ? 'text-amber-500' : 'text-border'}`}
           >
             ★
           </button>
@@ -56,7 +56,7 @@ export function ReviewForm({
         onChange={(e) => setText(e.target.value)}
         maxLength={2000}
       />
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
       <div className="mt-3 flex gap-2">
         <button type="button" className="btn-secondary text-xs" onClick={onCancel} disabled={submitting}>
           Отмена

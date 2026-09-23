@@ -41,7 +41,13 @@ export default function LoginPage() {
     <div>
       <Header />
       <main className="mx-auto flex max-w-md flex-col px-4 py-16">
-        <h1 className="section-title mb-6">Вход</h1>
+        <div className="mb-6 flex flex-col items-center text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-2xl font-bold text-white" aria-hidden>
+            M
+          </span>
+          <h1 className="section-title mt-3">Вход</h1>
+          <p className="muted mt-1">С возвращением на Marketplace</p>
+        </div>
         <form onSubmit={submit} className="card space-y-4 p-6">
           <div>
             <label className="label" htmlFor="login-phone">
@@ -72,22 +78,22 @@ export default function LoginPage() {
               required
             />
             <div className="mt-1 text-right">
-              <Link href="/forgot-password" className="text-xs text-brand-600 hover:underline">
+              <Link href="/forgot-password" className="text-xs text-accent hover:underline">
                 Забыли пароль?
               </Link>
             </div>
           </div>
           {error && (
-            <p className="text-sm text-red-600" role="alert">
+            <p className="text-sm text-danger" role="alert">
               {error}
             </p>
           )}
           <button className="btn-primary w-full" disabled={loading}>
             {loading ? 'Входим…' : 'Войти'}
           </button>
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-textSecondary">
             Нет аккаунта?{' '}
-            <Link href="/register" className="text-brand-600">
+            <Link href="/register" className="text-accent">
               Зарегистрируйтесь
             </Link>
           </div>

@@ -54,17 +54,23 @@ export default function RegisterPage() {
     <div>
       <Header />
       <main className="mx-auto flex max-w-md flex-col px-4 py-16">
-        <h1 className="mb-6 text-2xl font-bold">Регистрация</h1>
+        <div className="mb-6 flex flex-col items-center text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-2xl font-bold text-white" aria-hidden>
+            M
+          </span>
+          <h1 className="section-title mt-3">Регистрация</h1>
+          <p className="muted mt-1">Создайте аккаунт за минуту</p>
+        </div>
         <form onSubmit={submit} className="card space-y-4 p-6">
           <div>
             <label className="label">Имя</label>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
-            {errors.name && <p className="mt-1 text-xs text-red-600">{errors.name}</p>}
+            {errors.name && <p className="mt-1 text-xs text-danger">{errors.name}</p>}
           </div>
           <div>
             <label className="label">Телефон</label>
             <input className="input" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7 (999) 000-00-00" required />
-            {errors.phone && <p className="mt-1 text-xs text-red-600">{errors.phone}</p>}
+            {errors.phone && <p className="mt-1 text-xs text-danger">{errors.phone}</p>}
           </div>
           <div>
             <label className="label">Пароль</label>
@@ -75,21 +81,21 @@ export default function RegisterPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
             />
-            <p className="mt-1 text-xs text-gray-500">Минимум 8 символов, заглавная, строчная буква и цифра</p>
-            {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password}</p>}
+            <p className="mt-1 text-xs text-textSecondary">Минимум 8 символов, заглавная, строчная буква и цифра</p>
+            {errors.password && <p className="mt-1 text-xs text-danger">{errors.password}</p>}
           </div>
           <div>
             <label className="label">Повторите пароль</label>
             <input className="input" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
-            {errors.confirmPassword && <p className="mt-1 text-xs text-red-600">{errors.confirmPassword}</p>}
+            {errors.confirmPassword && <p className="mt-1 text-xs text-danger">{errors.confirmPassword}</p>}
           </div>
-          {general && <p className="text-sm text-red-600">{general}</p>}
+          {general && <p className="text-sm text-danger">{general}</p>}
           <button className="btn-primary w-full" disabled={loading}>
             {loading ? 'Создаём аккаунт…' : 'Зарегистрироваться'}
           </button>
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-textSecondary">
             Уже есть аккаунт?{' '}
-            <Link href="/login" className="text-brand-600">
+            <Link href="/login" className="text-accent">
               Войдите
             </Link>
           </div>

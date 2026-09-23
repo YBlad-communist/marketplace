@@ -328,8 +328,8 @@ function ChatContent() {
   return (
     <div>
       <Header />
-      <main className="mx-auto flex max-w-6xl gap-4 px-4 py-6">
-        <div className="w-72 shrink-0">
+      <main className="mx-auto flex max-w-container flex-col gap-4 px-4 py-6 md:flex-row">
+        <div className="w-full shrink-0 md:w-72">
           <h1 className="mb-4 text-lg font-bold">Чаты</h1>
           <div className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
             {conversations.map((c) => {
@@ -343,32 +343,32 @@ function ChatContent() {
                   <div className="flex items-center justify-between">
                     <span className="truncate text-sm font-medium">{name}</span>
                     {c.unreadCount > 0 && (
-                      <span className="rounded-full bg-brand-600 px-2 text-xs font-medium text-white">{c.unreadCount}</span>
+                      <span className="rounded-full bg-accent px-2 text-xs font-medium text-white">{c.unreadCount}</span>
                     )}
                   </div>
-                  <div className="truncate text-xs text-gray-500">{c.listing.title}</div>
-                  <div className="mt-1 truncate text-xs text-gray-400">{previewText(c)}</div>
+                  <div className="truncate text-xs text-textSecondary">{c.listing.title}</div>
+                  <div className="mt-1 truncate text-xs text-textMuted">{previewText(c)}</div>
                   {c.id === activeId && (
                     <span
                       aria-hidden="true"
-                      className="pointer-events-none absolute inset-0 rounded-2xl ring-2 ring-inset ring-brand-600"
+                      className="pointer-events-none absolute inset-0 rounded-2xl ring-2 ring-inset ring-accent"
                     />
                   )}
                 </button>
               );
             })}
-            {conversations.length === 0 && <div className="text-sm text-gray-500">Чатов пока нет</div>}
+            {conversations.length === 0 && <div className="text-sm text-textSecondary">Чатов пока нет</div>}
           </div>
         </div>
 
         <div className="card flex h-[70vh] flex-1 flex-col">
           {activeId ? (
             <>
-              <div className="flex items-center justify-between border-b border-gray-100 p-4 text-sm">
+              <div className="flex items-center justify-between border-b border-border p-4 text-sm">
                 <div>
                   <div className="font-medium">{otherName}</div>
                   {activeConv && (
-                    <div className="text-xs text-gray-500">
+                    <div className="text-xs text-textSecondary">
                       {activeConv.listing.title} · {formatPrice(activeConv.listing.price)}
                     </div>
                   )}
@@ -376,7 +376,7 @@ function ChatContent() {
                 <button
                   type="button"
                   onClick={deleteConversation}
-                  className="text-xs text-gray-400 hover:text-red-600"
+                  className="text-xs text-textMuted hover:text-danger"
                   title="Удалить чат для обоих участников"
                 >
                   Удалить чат
@@ -394,7 +394,7 @@ function ChatContent() {
                   return (
                     <div key={m.id} className={cn('flex items-end gap-2', mine ? 'justify-end' : 'justify-start')}>
                       {!mine && showHeader && (
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surfaceMuted text-xs font-semibold text-textSecondary">
                           {avatar ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={avatar} alt="" className="h-8 w-8 rounded-full object-cover" />
@@ -406,15 +406,15 @@ function ChatContent() {
                       {!mine && !showHeader && <div className="w-8 shrink-0" />}
                       <div className={cn('flex max-w-[70%] flex-col', mine ? 'items-end' : 'items-start')}>
                         {!mine && showHeader && (
-                          <div className="mb-0.5 px-1 text-xs font-medium text-gray-500">{name}</div>
+                          <div className="mb-0.5 px-1 text-xs font-medium text-textSecondary">{name}</div>
                         )}
                         <div
                           onContextMenu={(e) => openMenu(e, m)}
                           className={cn(
                             'break-words rounded-2xl px-3 py-2 text-sm shadow-sm',
                             mine
-                              ? 'rounded-br-md bg-brand-600 text-white'
-                              : 'rounded-bl-md border border-gray-100 bg-white text-gray-800',
+                              ? 'rounded-br-md bg-accent text-white'
+                              : 'rounded-bl-md border border-border bg-surface text-textPrimary',
                             m.deletedAt && 'italic opacity-60'
                           )}
                         >
@@ -437,7 +437,7 @@ function ChatContent() {
                             <div className="min-w-48" onClick={(e) => e.stopPropagation()}>
                               <textarea
                                 autoFocus
-                                className="w-full rounded-lg border border-white/40 bg-white/10 p-2 text-sm text-inherit outline-none"
+                                className="w-full rounded-lg border border-white/40 bg-surface/10 p-2 text-sm text-inherit outline-none"
                                 rows={2}
                                 value={editText}
                                 onChange={(e) => setEditText(e.target.value)}
@@ -461,7 +461,7 @@ function ChatContent() {
                             <>
                               {m.text}
                               {m.editedAt && !m.deletedAt && (
-                                <span className={cn('ml-1 text-[10px]', mine ? 'text-white/70' : 'text-gray-400')}>
+                                <span className={cn('ml-1 text-[10px]', mine ? 'text-white/70' : 'text-textMuted')}>
                                   (изм.)
                                 </span>
                               )}
@@ -470,7 +470,7 @@ function ChatContent() {
                           <div
                             className={cn(
                               'mt-1 text-right text-[10px] leading-none',
-                              mine ? 'text-white/70' : 'text-gray-400'
+                              mine ? 'text-white/70' : 'text-textMuted'
                             )}
                           >
                             {formatDateTime(m.createdAt)}
@@ -489,7 +489,7 @@ function ChatContent() {
                 )}
                 <div ref={bottomRef} />
               </div>
-              <div className="border-t border-gray-100 p-3">
+              <div className="border-t border-border p-3">
                 <div className="flex gap-2">
                   <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -521,14 +521,14 @@ function ChatContent() {
               </div>
             </>
           ) : (
-            <div className="flex flex-1 items-center justify-center text-gray-400">Выберите чат слева</div>
+            <div className="flex flex-1 items-center justify-center text-textMuted">Выберите чат слева</div>
           )}
         </div>
       </main>
 
       {menu && (
         <div
-          className="fixed z-50 min-w-44 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-xl"
+          className="fixed z-50 min-w-44 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
           style={{ left: menu.x, top: menu.y }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -536,14 +536,14 @@ function ChatContent() {
             <>
               <button
                 type="button"
-                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+                className="block w-full px-4 py-2 text-left text-sm hover:bg-surfaceMuted"
                 onClick={() => startEdit(menu.message)}
               >
                 Редактировать
               </button>
               <button
                 type="button"
-                className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100"
+                className="block w-full px-4 py-2 text-left text-sm text-danger hover:bg-surfaceMuted"
                 onClick={() => deleteMessage(menu.message)}
               >
                 Удалить
@@ -553,7 +553,7 @@ function ChatContent() {
           {menu.message.text && (
             <button
               type="button"
-              className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+              className="block w-full px-4 py-2 text-left text-sm hover:bg-surfaceMuted"
               onClick={() => {
                 void navigator.clipboard?.writeText(menu.message.text).catch(() => undefined);
                 setMenu(null);
@@ -574,7 +574,7 @@ export default function ChatPage() {
       fallback={
         <div>
           <Header />
-          <main className="mx-auto max-w-6xl px-4 py-6 text-gray-400">Загрузка…</main>
+          <main className="container-x py-6 text-textMuted">Загрузка…</main>
         </div>
       }
     >

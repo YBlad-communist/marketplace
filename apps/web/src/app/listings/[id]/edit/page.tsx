@@ -19,7 +19,7 @@ export default function EditListingPage() {
       <Header />
       <main className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="mb-6 text-2xl font-bold">Редактирование объявления</h1>
-        {isLoading && <div className="text-gray-500">Загрузка…</div>}
+        {isLoading && <div className="text-textSecondary">Загрузка…</div>}
         {data && <ListingForm mode="edit" initial={data.data.listing} />}
       </main>
     </div>

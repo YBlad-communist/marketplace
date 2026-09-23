@@ -53,14 +53,14 @@ export function PhoneChangeForm({ onDone }: { onDone: () => void }) {
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
           />
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
           <button type="button" className="btn-primary text-xs" onClick={requestCode} disabled={submitting || !phone}>
             Получить код
           </button>
         </>
       ) : (
         <>
-          <p className="text-sm text-gray-600">Код отправлен на {phone}</p>
+          <p className="text-sm text-textSecondary">Код отправлен на {phone}</p>
           <input
             className="input"
             inputMode="numeric"
@@ -69,7 +69,7 @@ export function PhoneChangeForm({ onDone }: { onDone: () => void }) {
             value={code}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
           />
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
           <button
             type="button"
             className="btn-primary text-xs"

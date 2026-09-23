@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
 import { CheckoutModal } from '@/components/CheckoutModal';
 import { ListingCard } from '@/components/ListingCard';
+import { Tabs } from '@/components/ui/primitives';
 import { del, get, post, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { ListingDto } from '@/lib/types';
@@ -19,14 +20,14 @@ function Gallery({ images, title }: { images: ListingDto['images']; title: strin
   return (
     <div>
       <div
-        className="aspect-[4/3] cursor-zoom-in overflow-hidden rounded-2xl bg-gray-100"
+        className="aspect-[4/3] cursor-zoom-in overflow-hidden rounded-2xl bg-surfaceMuted"
         onClick={() => img && setZoom(true)}
       >
         {img ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={img.url} alt={title} className="h-full w-full object-cover" />
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-gray-500">Нет фото</div>
+          <div className="flex h-full items-center justify-center text-sm text-textSecondary">Нет фото</div>
         )}
       </div>
       {images.length > 1 && (
@@ -37,7 +38,7 @@ function Gallery({ images, title }: { images: ListingDto['images']; title: strin
               onClick={() => setActive(idx)}
               aria-label={`Фото ${idx + 1}`}
               aria-pressed={idx === active}
-              className={`h-16 w-16 shrink-0 overflow-hidden rounded-xl border-2 transition-all ${idx === active ? 'border-brand-600 ring-2 ring-brand-500/30' : 'border-transparent opacity-70 hover:opacity-100'}`}
+              className={`h-16 w-16 shrink-0 overflow-hidden rounded-xl border-2 transition-all ${idx === active ? 'border-accent ring-2 ring-focus/30' : 'border-transparent opacity-70 hover:opacity-100'}`}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={i.thumbUrl ?? i.url} alt="" className="h-full w-full object-cover" />
@@ -54,7 +55,7 @@ function Gallery({ images, title }: { images: ListingDto['images']; title: strin
           aria-label="Просмотр фото"
         >
           <button
-            className="absolute right-4 top-4 rounded-full bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/20"
+            className="absolute right-4 top-4 rounded-full bg-surface/10 px-4 py-2 text-sm text-white hover:bg-surface/20"
             onClick={() => setZoom(false)}
             aria-label="Закрыть просмотр"
           >
@@ -72,10 +73,10 @@ function Attributes({ attributes }: { attributes: ListingDto['attributes'] }) {
   const entries = Object.entries(attributes ?? {}).filter(([, v]) => v !== null && v !== '');
   if (entries.length === 0) return null;
   return (
-    <dl className="mt-6 grid grid-cols-2 gap-3">
+    <dl className="mt-4 grid grid-cols-2 gap-3">
       {entries.map(([k, v]) => (
-        <div key={k} className="rounded-lg bg-gray-50 px-3 py-2 text-sm">
-          <dt className="text-gray-500 capitalize">{k}</dt>
+        <div key={k} className="rounded-lg bg-surfaceMuted px-3 py-2 text-sm">
+          <dt className="text-textSecondary capitalize">{k}</dt>
           <dd className="font-medium">{String(v)}</dd>
         </div>
       ))}
@@ -90,6 +91,7 @@ export default function ListingPage() {
   const user = useAuthStore((s) => s.user);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [infoTab, setInfoTab] = useState('desc');
 
   const listingQuery = useQuery({
     queryKey: ['listing', params.id],
@@ -162,7 +164,7 @@ export default function ListingPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-6" aria-label="Загрузка объявления">
+        <main className="container-x py-6" aria-label="Загрузка объявления">
           <div className="skeleton h-4 w-1/3" />
           <div className="mt-4 grid gap-6 lg:grid-cols-2">
             <div className="skeleton aspect-[4/3]" />
@@ -181,7 +183,7 @@ export default function ListingPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-10">
+        <main className="container-x py-10">
           <div className="empty-state" role="alert">
             <p className="font-semibold">Не удалось загрузить объявление</p>
             <button className="btn-secondary mt-4" onClick={() => listingQuery.refetch()}>
@@ -196,7 +198,7 @@ export default function ListingPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-10 text-center text-gray-500">Объявление не найдено</main>
+        <main className="container-x py-10 text-center text-textSecondary">Объявление не найдено</main>
       </div>
     );
   }
@@ -204,13 +206,14 @@ export default function ListingPage() {
   const isOwner = user?.id === listing.seller.id;
   const isStaff = user?.role === 'ADMIN' || user?.role === 'MODERATOR';
   const canDelete = isOwner || isStaff;
+  const attrCount = Object.entries(listing.attributes ?? {}).filter(([, v]) => v !== null && v !== '').length;
 
   return (
     <div>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-6">
+      <main className="container-x py-6">
         <nav className="muted-xs mb-4 flex flex-wrap items-center gap-1" aria-label="Хлебные крошки">
-          <Link href="/" className="hover:text-brand-700">
+          <Link href="/" className="hover:text-accentHover">
             Каталог
           </Link>
           <span aria-hidden>/</span>
@@ -220,7 +223,7 @@ export default function ListingPage() {
               <span aria-hidden>/</span>
             </>
           )}
-          <span className="max-w-64 truncate text-gray-800" aria-current="page">
+          <span className="max-w-64 truncate text-textPrimary" aria-current="page">
             {listing.title}
           </span>
         </nav>
@@ -246,7 +249,7 @@ export default function ListingPage() {
               </button>
             </div>
 
-            <div className="mt-4 text-3xl font-bold tracking-tight text-gray-900">
+            <div className="mt-4 text-3xl font-bold tracking-tight text-textPrimary">
               {formatPrice(listing.price, listing.currency)}
             </div>
 
@@ -257,11 +260,32 @@ export default function ListingPage() {
             )}
 
             <div className="mt-6">
-              <h2 className="mb-2 font-semibold">Описание</h2>
-              <p className="whitespace-pre-line text-gray-700">{listing.description}</p>
+              {attrCount > 0 ? (
+                <>
+                  <Tabs
+                    tabs={[
+                      { id: 'desc', label: 'Описание' },
+                      { id: 'attrs', label: `Характеристики · ${attrCount}` },
+                    ]}
+                    value={infoTab}
+                    onChange={setInfoTab}
+                    ariaLabel="Информация об объявлении"
+                  />
+                  <div className="pt-4" role="tabpanel">
+                    {infoTab === 'desc' ? (
+                      <p className="whitespace-pre-line leading-body text-textPrimary">{listing.description}</p>
+                    ) : (
+                      <Attributes attributes={listing.attributes} />
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2 className="mb-2 font-semibold">Описание</h2>
+                  <p className="whitespace-pre-line text-textPrimary">{listing.description}</p>
+                </>
+              )}
             </div>
-
-            <Attributes attributes={listing.attributes} />
 
             {!isOwner && (
               <div className="mt-8 flex gap-3">
@@ -275,7 +299,7 @@ export default function ListingPage() {
                 )}
               </div>
             )}
-            {chatError && <p className="mt-2 text-sm text-red-600">{chatError}</p>}
+            {chatError && <p className="mt-2 text-sm text-danger">{chatError}</p>}
             {canDelete && (
               <div className="mt-8 flex gap-3">
                 {isOwner && (
@@ -293,7 +317,7 @@ export default function ListingPage() {
               </div>
             )}
             {deleteError && (
-              <p className="mt-2 text-sm text-red-600" role="alert">
+              <p className="mt-2 text-sm text-danger" role="alert">
                 {deleteError}
               </p>
             )}
@@ -319,7 +343,7 @@ export default function ListingPage() {
                     <option value="OTHER">Другое</option>
                   </select>
                   <button
-                    className="muted-xs underline decoration-gray-300 underline-offset-2 hover:text-red-600"
+                    className="muted-xs underline decoration-border underline-offset-2 hover:text-danger"
                     disabled={reportMutation.isPending}
                     onClick={() => reportMutation.mutate()}
                   >
@@ -338,13 +362,13 @@ export default function ListingPage() {
               // eslint-disable-next-line @next/next/no-img-element
               <img src={listing.seller.avatarUrl} alt="" className="h-14 w-14 rounded-full object-cover" />
             ) : (
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-200 text-lg font-bold">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surfaceMuted text-lg font-bold">
                 {listing.seller.name[0]}
               </div>
             )}
             <div>
               <div className="font-medium">
-                <Link href={`/users/${listing.seller.id}`} className="hover:text-brand-600">
+                <Link href={`/users/${listing.seller.id}`} className="hover:text-accent">
                   {listing.seller.name}
                 </Link>
               </div>

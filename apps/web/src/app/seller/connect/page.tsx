@@ -35,14 +35,14 @@ export default function SellerConnectPage() {
         <h1 className="mb-6 text-2xl font-bold">Подключение выплат</h1>
 
         <div className="card space-y-5 p-6">
-          <p className="text-gray-700">
+          <p className="text-textPrimary">
             Для получения оплаты по проданным объявлениям укажите Shop ID вашего магазина ЮKassa
             (создайте магазин в личном кабинете ЮKassa и включите для него приём платежей). Деньги
             покупателя удерживаются платформой и переводятся вам после подтверждения получения.
           </p>
 
           {user?.yookassaOnboarded ? (
-            <div className="rounded-lg bg-green-100 p-4 text-sm text-green-700">
+            <div className="rounded-lg bg-accentSoft p-4 text-sm text-green-700">
               Выплаты подключены{user.yookassaShopId ? ` (Shop ID: ${user.yookassaShopId})` : ''}.
             </div>
           ) : (
@@ -54,7 +54,7 @@ export default function SellerConnectPage() {
               }}
             >
               <label className="block">
-                <span className="mb-1 block text-sm text-gray-600">Shop ID магазина ЮKassa</span>
+                <span className="mb-1 block text-sm text-textSecondary">Shop ID магазина ЮKassa</span>
                 <input
                   className="input"
                   value={shopId}
@@ -66,12 +66,12 @@ export default function SellerConnectPage() {
               <button className="btn-primary w-full" disabled={connect.isPending || !shopId.trim()}>
                 {connect.isPending ? 'Сохраняем…' : 'Подключить ЮKassa'}
               </button>
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-danger">{error}</p>}
             </form>
           )}
 
-          <div className="text-sm text-gray-500">
-            <Link href="/cabinet" className="text-brand-600">
+          <div className="text-sm text-textSecondary">
+            <Link href="/cabinet" className="text-accent">
               ← Назад в кабинет
             </Link>
           </div>

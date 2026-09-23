@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
 import { ListingCard } from '@/components/ListingCard';
+import { EmptyState, CardSkeleton } from '@/components/ui/primitives';
 import { get } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { CursorPage, ListingDto } from '@/lib/types';
@@ -22,11 +23,16 @@ export default function FavoritesPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-10 text-center text-gray-500">
-          <Link href="/login" className="text-brand-600">
-            Войдите
-          </Link>{' '}
-          чтобы увидеть избранное
+        <main className="container-x py-8">
+          <EmptyState
+            icon="♡"
+            title="Войдите, чтобы увидеть избранное"
+            action={
+              <Link href="/login" className="btn-primary text-sm">
+                Войти
+              </Link>
+            }
+          />
         </main>
       </div>
     );
@@ -37,20 +43,31 @@ export default function FavoritesPage() {
   return (
     <div>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8">
-        <h1 className="mb-6 text-2xl font-bold">Избранное</h1>
+      <main className="container-x py-8">
+        <h1 className="section-title mb-6">Избранное</h1>
+        {favoritesQuery.isLoading && (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" role="status" aria-label="Загрузка избранного">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <CardSkeleton key={i} />
+            ))}
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {items.map((l) => (
             <ListingCard key={l.id} listing={l} />
           ))}
         </div>
         {!favoritesQuery.isLoading && items.length === 0 && (
-          <div className="text-gray-500">
-            В избранном пока пусто.{' '}
-            <Link href="/" className="text-brand-600">
-              Смотреть объявления
-            </Link>
-          </div>
+          <EmptyState
+            icon="♡"
+            title="В избранном пока пусто"
+            hint="Нажимайте на сердечко, чтобы сохранять объявления"
+            action={
+              <Link href="/" className="btn-secondary text-sm">
+                Смотреть объявления
+              </Link>
+            }
+          />
         )}
       </main>
     </div>

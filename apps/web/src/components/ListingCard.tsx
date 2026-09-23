@@ -6,7 +6,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ListingDto } from '@/lib/types';
 import { del, post } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
-import { cn, formatPrice } from '@/lib/format';
+import { cn, formatDate, formatPrice } from '@/lib/format';
 
 function HeartIcon({ filled }: { filled: boolean }) {
   return (
@@ -33,6 +33,7 @@ export function ListingCard({ listing }: { listing: ListingDto }) {
   const user = useAuthStore((s) => s.user);
   const image = listing.images?.[0];
   const isOwner = user?.id === listing.seller?.id;
+  const isNew = Date.now() - new Date(listing.createdAt).getTime() < 7 * 24 * 3600_000;
 
   const favoriteMutation = useMutation({
     mutationFn: () =>
@@ -58,9 +59,9 @@ export function ListingCard({ listing }: { listing: ListingDto }) {
   };
 
   return (
-    <div className="card group relative overflow-hidden transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg">
+    <div className="card card-hover group relative overflow-hidden">
       <Link href={`/listings/${listing.id}`} className="block" aria-label={listing.title}>
-        <div className="aspect-[4/3] bg-gray-100">
+        <div className="relative aspect-[4/3] bg-surfaceMuted">
           {image ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -70,19 +71,20 @@ export function ListingCard({ listing }: { listing: ListingDto }) {
               className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
             />
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-gray-500">Нет фото</div>
+            <div className="flex h-full items-center justify-center text-sm text-textMuted">Нет фото</div>
+          )}
+          {isNew && (
+            <span className="badge-green absolute left-2 top-2 !px-2 shadow-sm">Новое</span>
           )}
         </div>
         <div className="p-3">
-          <div className="text-lg font-bold tracking-tight text-gray-900">
+          <div className="text-lg font-bold leading-heading tracking-tight text-textPrimary">
             {formatPrice(listing.price, listing.currency ?? 'EUR')}
           </div>
-          <div className="mt-0.5 line-clamp-2 min-h-10 text-sm text-gray-800">{listing.title}</div>
-          <div className="mt-1.5 flex items-center justify-between text-xs text-gray-600">
+          <div className="mt-0.5 line-clamp-2 min-h-10 text-sm leading-body text-textPrimary">{listing.title}</div>
+          <div className="muted-xs mt-1.5 flex items-center justify-between gap-2">
             <span className="truncate">{listing.city}</span>
-            {typeof listing.viewsCount === 'number' && (
-              <span className="shrink-0 pl-2">{listing.viewsCount} просм.</span>
-            )}
+            <span className="shrink-0">{formatDate(listing.createdAt)}</span>
           </div>
         </div>
       </Link>
@@ -95,8 +97,8 @@ export function ListingCard({ listing }: { listing: ListingDto }) {
           className={cn(
             'absolute right-2 top-2 rounded-full p-2 shadow-sm backdrop-blur transition-all',
             listing.isFavorite
-              ? 'bg-brand-600 text-white hover:bg-brand-700'
-              : 'bg-white/90 text-gray-600 hover:text-brand-600'
+              ? 'bg-accent text-white hover:bg-accentHover'
+              : 'bg-surface/90 text-textSecondary hover:text-accent'
           )}
         >
           <HeartIcon filled={Boolean(listing.isFavorite)} />

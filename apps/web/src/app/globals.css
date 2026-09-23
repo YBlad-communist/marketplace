@@ -3,88 +3,129 @@
 @tailwind utilities;
 
 :root {
-  --brand: #3b82f6;
+  --brand: #16a34a;
 }
 
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  @apply bg-background font-sans leading-body text-textPrimary antialiased;
 }
 
-/* Видимый фокус для клавиатурной навигации (a11y) */
+h1,
+h2,
+h3,
+h4 {
+  @apply leading-heading tracking-tight;
+}
+
+/* Видимый фокус для клавиатурной навигации (a11y): зелёное кольцо */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--brand);
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #22c55e;
   outline-offset: 2px;
 }
 
+/* Контейнер страницы: 1280px, отступы 16/24/32 */
+.container-x {
+  @apply mx-auto w-full max-w-container px-4 sm:px-6 lg:px-8;
+}
+
 .btn {
-  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .btn-primary {
-  @apply btn bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:scale-[0.98];
+  @apply btn bg-accent text-white shadow-sm hover:bg-accentHover active:bg-accentActive active:scale-[0.98];
 }
 
 .btn-secondary {
-  @apply btn border border-gray-300 bg-white text-gray-700 hover:border-gray-400 hover:bg-gray-50 active:scale-[0.98];
+  @apply btn border border-border bg-surface text-textPrimary hover:border-textMuted hover:bg-surfaceMuted active:scale-[0.98];
+}
+
+.btn-ghost {
+  @apply btn text-textSecondary hover:bg-surfaceMuted hover:text-textPrimary active:scale-[0.98];
 }
 
 .btn-danger {
-  @apply btn bg-red-600 text-white hover:bg-red-700 active:scale-[0.98];
+  @apply btn bg-danger text-white hover:brightness-95 active:scale-[0.98];
+}
+
+.btn-sm {
+  @apply px-3 py-1.5 text-xs;
+}
+
+.btn-lg {
+  @apply px-6 py-3 text-base;
 }
 
 .input {
-  @apply w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30;
+  @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-textPrimary outline-none placeholder:text-textMuted focus:border-accent focus:ring-2 focus:ring-focus;
 }
 
 .label {
-  @apply mb-1 block text-sm font-medium text-gray-700;
+  @apply mb-1 block text-sm font-medium text-textPrimary;
+}
+
+.input-error {
+  @apply border-danger focus:border-danger focus:ring-danger/30;
+}
+
+.field-hint {
+  @apply mt-1 text-xs text-textSecondary;
+}
+
+.field-error {
+  @apply mt-1 text-xs text-danger;
 }
 
 .card {
-  @apply rounded-2xl border border-gray-200 bg-white shadow-sm;
+  @apply rounded-xl border border-border bg-surface shadow-card;
+}
+
+.card-hover {
+  @apply transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover;
 }
 
 /* Заголовки разделов */
 .section-title {
-  @apply text-2xl font-bold tracking-tight;
+  @apply text-2xl font-bold leading-heading;
 }
 
 /* Вторичный текст с достаточным контрастом (AA на белом) */
 .muted {
-  @apply text-sm text-gray-600;
+  @apply text-sm leading-body text-textSecondary;
 }
 
 .muted-xs {
-  @apply text-xs text-gray-600;
+  @apply text-xs text-textSecondary;
 }
 
 /* Бейджи статусов */
 .badge {
-  @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-medium;
+  @apply inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium;
 }
 
 .badge-green {
-  @apply badge bg-green-100 text-green-800;
+  @apply badge bg-accentSoft text-accentActive;
 }
 
 .badge-red {
-  @apply badge bg-red-100 text-red-800;
+  @apply badge bg-danger/10 text-danger;
 }
 
 .badge-gray {
-  @apply badge bg-gray-100 text-gray-700;
+  @apply badge bg-surfaceMuted text-textSecondary;
 }
 
 .badge-amber {
-  @apply badge bg-amber-100 text-amber-800;
+  @apply badge bg-warning/15 text-amber-800;
 }
 
 .badge-blue {
-  @apply badge bg-blue-100 text-blue-800;
+  @apply badge bg-info/10 text-sky-800;
 }
 
 /* Скелетоны загрузки */
@@ -98,7 +139,7 @@ textarea:focus-visible {
 }
 
 .skeleton {
-  @apply rounded-xl bg-gray-200;
+  @apply rounded-xl bg-surfaceMuted;
   background-image: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
   background-size: 800px 100%;
   animation: skeleton-shimmer 1.4s linear infinite;
@@ -107,6 +148,19 @@ textarea:focus-visible {
 /* Пустые состояния */
 .empty-state {
   @apply mx-auto flex max-w-md flex-col items-center px-4 py-12 text-center;
+}
+
+/* Табы */
+.tabs-list {
+  @apply flex gap-1 overflow-x-auto border-b border-border;
+}
+
+.tab-btn {
+  @apply whitespace-nowrap px-4 py-2.5 text-sm font-medium text-textSecondary transition-colors hover:text-textPrimary;
+}
+
+.tab-btn[aria-selected='true'] {
+  @apply border-b-2 border-accent text-textPrimary;
 }
 
 /* Анимация «печатает…» в чате */
@@ -124,7 +178,7 @@ textarea:focus-visible {
 }
 
 .typing-dot {
-  @apply inline-block h-1.5 w-1.5 rounded-full bg-gray-500;
+  @apply inline-block h-1.5 w-1.5 rounded-full bg-textSecondary;
   animation: typing-bounce 1.2s ease-in-out infinite;
 }
 
@@ -134,6 +188,79 @@ textarea:focus-visible {
 
 .typing-dot:nth-child(3) {
   animation-delay: 0.3s;
+}
+
+/* Спиннер загрузки */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  @apply inline-block h-4 w-4 rounded-full border-2 border-current border-t-transparent;
+  animation: spin 0.7s linear infinite;
+}
+
+/* Тосты */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.toast-enter {
+  animation: toast-in 0.2s ease-out both;
+}
+
+/* Модалка */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-enter {
+  animation: modal-in 0.2s ease-out both;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.overlay-enter {
+  animation: overlay-in 0.2s ease-out both;
+}
+
+/* Тонкие скроллбары в панелях */
+.nice-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.nice-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.nice-scroll::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 999px;
 }
 
 /* ---------- Переходы между страницами ---------- */
@@ -194,7 +321,7 @@ textarea:focus-visible {
   will-change: opacity, transform, filter;
 }
 
-/* Тонкий прогресс-бар навигации (сверху, фирменный синий) */
+/* Тонкий прогресс-бар навигации (сверху, акцентный зелёный) */
 @keyframes route-progress {
   0% {
     transform: scaleX(0);
@@ -217,8 +344,8 @@ textarea:focus-visible {
   right: 0;
   z-index: 100;
   height: 3px;
-  background: linear-gradient(90deg, var(--brand), #60a5fa);
-  box-shadow: 0 0 8px rgba(59, 130, 246, 0.7);
+  background: linear-gradient(90deg, var(--brand), #4ade80);
+  box-shadow: 0 0 8px rgba(22, 163, 74, 0.5);
   transform-origin: left;
   animation: route-progress 1.2s cubic-bezier(0.22, 1, 0.36, 1) both;
   pointer-events: none;

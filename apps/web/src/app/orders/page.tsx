@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
 import { ReviewForm } from '@/components/ReviewForm';
+import { EmptyState } from '@/components/ui/primitives';
 import { get, post } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { OrderDto } from '@/lib/types';
@@ -38,7 +39,7 @@ function OrderRow({
 
   return (
     <div className="card flex flex-wrap items-center gap-4 p-4">
-      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-gray-100">
+      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-surfaceMuted">
         {order.listing?.images[0] ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={order.listing.images[0].thumbUrl ?? order.listing.images[0].url} alt="" className="h-full w-full object-cover" />
@@ -46,19 +47,19 @@ function OrderRow({
       </div>
       <div className="min-w-0 flex-1">
         {order.listing && (
-          <Link href={`/listings/${order.listing.id}`} className="block truncate font-medium hover:text-brand-600">
+          <Link href={`/listings/${order.listing.id}`} className="block truncate font-medium hover:text-accent">
             {order.listing.title}
           </Link>
         )}
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-textSecondary">
           {role === 'seller' && order.buyer
             ? `Покупатель: ${order.buyer.name}`
             : order.listing?.seller
               ? `Продавец: ${order.listing.seller.name}`
               : null}
         </div>
-        <div className="text-xs text-gray-400">{formatDateTime(order.createdAt)}</div>
-        <Link href={`/orders/${order.id}`} className="text-xs text-gray-400 hover:text-brand-600 hover:underline">
+        <div className="text-xs text-textMuted">{formatDateTime(order.createdAt)}</div>
+        <Link href={`/orders/${order.id}`} className="text-xs text-textMuted hover:text-accent hover:underline">
           Подробнее →
         </Link>
       </div>
@@ -112,7 +113,7 @@ function OrderRow({
         </div>
       )}
       {order.status === 'PAID' && (
-        <p className="basis-full text-xs text-gray-500">
+        <p className="basis-full text-xs text-textSecondary">
           {role === 'buyer'
             ? 'Деньги заблокированы на вашей карте и спишутся только после вашего подтверждения получения.'
             : 'Деньги заблокированы у покупателя. Вы получите их, когда сделка будет подтверждена.'}
@@ -143,11 +144,16 @@ export default function OrdersPage() {
     return (
       <div>
         <Header />
-        <main className="mx-auto max-w-6xl px-4 py-10 text-center text-gray-500">
-          <Link href="/login" className="text-brand-600">
-            Войдите
-          </Link>{' '}
-          чтобы увидеть заказы
+        <main className="container-x py-8">
+          <EmptyState
+            icon="🧾"
+            title="Войдите, чтобы увидеть заказы"
+            action={
+              <Link href="/login" className="btn-primary text-sm">
+                Войти
+              </Link>
+            }
+          />
         </main>
       </div>
     );
@@ -158,7 +164,7 @@ export default function OrdersPage() {
   return (
     <div>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8">
+      <main className="container-x py-8">
         <h1 className="section-title mb-6">Заказы</h1>
 
         <h2 className="mb-3 text-lg font-semibold">
@@ -166,7 +172,7 @@ export default function OrdersPage() {
           {buyerOrders.length > 0 && <span className="muted font-normal">· {buyerOrders.length}</span>}
         </h2>
         <div className="space-y-3">
-          {buyerOrders.length === 0 && <div className="text-sm text-gray-500">Покупок пока нет</div>}
+          {buyerOrders.length === 0 && <div className="text-sm text-textSecondary">Покупок пока нет</div>}
           {buyerOrders.map((o) => (
             <OrderRow
               key={o.id}
@@ -184,7 +190,7 @@ export default function OrdersPage() {
           {sellerOrders.length > 0 && <span className="muted font-normal">· {sellerOrders.length}</span>}
         </h2>
         <div className="space-y-3">
-          {sellerOrders.length === 0 && <div className="text-sm text-gray-500">Продаж пока нет</div>}
+          {sellerOrders.length === 0 && <div className="text-sm text-textSecondary">Продаж пока нет</div>}
           {sellerOrders.map((o) => (
             <OrderRow
               key={o.id}
