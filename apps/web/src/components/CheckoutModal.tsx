@@ -92,15 +92,12 @@ export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
         <h3 className="mb-1 text-lg font-semibold">Безопасная сделка</h3>
-        <p className="mb-4 text-sm text-gray-600">
-          {formatPrice(price, currency)} — деньги удерживаются платформой до подтверждения получения товара.
-        </p>
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-          <p className="font-medium">Как это работает</p>
+          <p className="font-medium">{formatPrice(price, currency)}</p>
           <p className="mt-1">
-            Деньги не переводятся продавцу сразу — они блокируются на вашей карте.
-            Спишутся только после того, как вы подтвердите получение товара или услуги.
-            Не подтвердите — блокировка снимется автоматически через 7 дней, и деньги останутся у вас.
+            Деньги не переводятся продавцу сразу — они блокируются на вашей карте. Спишутся
+            только после того, как вы подтвердите получение товара/услуги. Не подтвердите —
+            блокировка снимется автоматически через 7 дней, и деньги останутся у вас.
           </p>
         </div>
         {status === 'loading' && <p className="text-sm text-gray-500">Подготавливаем оплату…</p>}
