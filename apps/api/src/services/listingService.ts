@@ -60,7 +60,14 @@ export function decodeCursor(cursor: string): { primary: Date | number; id: stri
 
 function buildWhere(input: ListingQueryInput): Prisma.ListingWhereInput {
   const where: Prisma.ListingWhereInput = {};
-  if (input.status) where.status = input.status as ListingStatus;
+  // Статус — опциональный фильтр: учитывается только если передан явно.
+  // Дефолт ACTIVE сохраняется для публичного контекста (без sellerId);
+  // с sellerId (кабинет продавца) без статуса отдаются все объявления.
+  if (input.status) {
+    where.status = input.status as ListingStatus;
+  } else if (!input.sellerId) {
+    where.status = 'ACTIVE';
+  }
   if (input.category) {
     where.OR = [{ categoryId: input.category }, { category: { parentId: input.category } }];
   }
@@ -114,8 +121,11 @@ async function textSearchIds(
   limit: number,
   cursor?: string
 ): Promise<{ rows: SearchRow[]; nextCursor: string | null; total: number }> {
-  // Уважаем запрошенный статус (по умолчанию ACTIVE). Раньше хардкодился ACTIVE+SOLD.
-  const statuses = input.status ? [input.status] : ['ACTIVE'];
+  // Уважаем запрошенный статус. Дефолт ACTIVE — только для публичного
+  // контекста (без sellerId); в кабинете продавца (sellerId задан, статуса
+  // нет) полнотекстовый поиск идёт по всем статусам, как и обычный where.
+  const ALL_STATUSES = ['PENDING', 'ACTIVE', 'RESERVED', 'SOLD', 'REJECTED', 'ARCHIVED'];
+  const statuses = input.status ? [input.status] : input.sellerId ? ALL_STATUSES : ['ACTIVE'];
   const conditions: Prisma.Sql[] = [
     Prisma.sql`("Listing"."status"::text IN (${Prisma.join(statuses.map((s) => Prisma.sql`${s}`), ', ')}))`,
     Prisma.sql`(

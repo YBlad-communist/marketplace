@@ -53,7 +53,7 @@ export const listingQuerySchema = z.object({
   lat: z.coerce.number().min(-90).max(90).optional(),
   lng: z.coerce.number().min(-180).max(180).optional(),
   radiusKm: z.coerce.number().min(0.1).max(2000).default(50),
-  status: z.enum(['ACTIVE', 'RESERVED', 'SOLD']).default('ACTIVE'),
+  status: z.enum(['PENDING', 'ACTIVE', 'RESERVED', 'SOLD', 'REJECTED', 'ARCHIVED']).optional(),
   sort: z
     .enum(['relevance', 'date_desc', 'date_asc', 'price_asc', 'price_desc'])
     .default('date_desc'),

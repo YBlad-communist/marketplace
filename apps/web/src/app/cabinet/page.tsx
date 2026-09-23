@@ -17,10 +17,16 @@ export default function CabinetPage() {
   const user = useAuthStore((s) => s.user);
   const [editingProfile, setEditingProfile] = useState(false);
 
+  const [statusFilter, setStatusFilter] = useState<
+    'ALL' | 'ACTIVE' | 'RESERVED' | 'SOLD' | 'PENDING' | 'REJECTED' | 'ARCHIVED'
+  >('ALL');
+
   const myListingsQuery = useQuery({
-    queryKey: ['my-listings'],
+    queryKey: ['my-listings', statusFilter],
     queryFn: () =>
-      get<{ data: CursorPage<ListingDto> }>(`/api/listings?sellerId=${user?.id}&status=ACTIVE&limit=50`),
+      get<{ data: CursorPage<ListingDto> }>(
+        `/api/listings?sellerId=${user?.id}&limit=50${statusFilter !== 'ALL' ? `&status=${statusFilter}` : ''}`
+      ),
     enabled: Boolean(user?.id),
   });
 
@@ -96,6 +102,28 @@ export default function CabinetPage() {
         </div>
 
         <h2 className="mb-4 text-lg font-semibold">Мои объявления</h2>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {(['ALL', 'ACTIVE', 'RESERVED', 'SOLD', 'PENDING', 'REJECTED', 'ARCHIVED'] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setStatusFilter(s)}
+              className={`rounded-full px-3 py-1 text-xs ${statusFilter === s ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600'}`}
+            >
+              {
+                {
+                  ALL: 'Все',
+                  ACTIVE: 'Активные',
+                  RESERVED: 'Забронированы',
+                  SOLD: 'Проданы',
+                  PENDING: 'На модерации',
+                  REJECTED: 'Отклонены',
+                  ARCHIVED: 'Архив',
+                }[s]
+              }
+            </button>
+          ))}
+        </div>
         <div className="space-y-3">
           {myListingsQuery.isLoading &&
             Array.from({ length: 3 }).map((_, i) => (
