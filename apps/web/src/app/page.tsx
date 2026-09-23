@@ -111,16 +111,16 @@ export default function HomePage() {
                 onChange={(e) => setCategory(e.target.value)}
               >
                 <option value="">Все категории</option>
-                {(categoriesQuery.data?.data.categories ?? []).map((c) => (
-                  <optgroup key={c.id} label={c.name}>
-                    <option value={c.id}>{c.name}</option>
-                    {(c.children ?? []).map((ch) => (
-                      <option key={ch.id} value={ch.id}>
-                        — {ch.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
+                {(categoriesQuery.data?.data.categories ?? []).flatMap((c) => [
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>,
+                  ...(c.children ?? []).map((ch) => (
+                    <option key={ch.id} value={ch.id}>
+                      {c.name} — {ch.name}
+                    </option>
+                  )),
+                ])}
               </select>
             </div>
           </div>

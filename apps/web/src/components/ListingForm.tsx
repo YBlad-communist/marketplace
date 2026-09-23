@@ -41,7 +41,6 @@ function attributeInput(
         </select>
       );
     case 'NUMBER':
-    case 'RANGE':
       return (
         <input
           className="input"
@@ -52,6 +51,27 @@ function attributeInput(
           onChange={(e) => setValue(e.target.value)}
         />
       );
+    case 'RANGE': {
+      // Диапазонный атрибут — ползунок с видимым значением (мин/макс из категории).
+      const min = attr.min ?? 0;
+      const max = attr.max ?? 100;
+      return (
+        <div className="flex items-center gap-3">
+          <input
+            className="flex-1 accent-brand-600"
+            type="range"
+            min={min}
+            max={max}
+            value={value === '' ? String(min) : value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <span className="w-20 shrink-0 text-sm text-gray-700">
+            {value === '' ? min : value}
+            {attr.unit ? ` ${attr.unit}` : ''}
+          </span>
+        </div>
+      );
+    }
     default:
       return <input className="input" value={value} onChange={(e) => setValue(e.target.value)} />;
   }
@@ -63,7 +83,6 @@ export function ListingForm({ mode, initial }: Props) {
   const [description, setDescription] = useState(initial?.description ?? '');
   const [price, setPrice] = useState(initial ? String(initial.price) : '');
   const [city, setCity] = useState(initial?.city ?? '');
-  const [categoryId, setCategoryId] = useState(initial?.category?.id ?? '');
   const [attributeValues, setAttributeValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(Object.entries(initial?.attributes ?? {}).map(([k, v]) => [k, String(v)]))
   );
@@ -77,12 +96,34 @@ export function ListingForm({ mode, initial }: Props) {
     queryKey: ['categories'],
     queryFn: () => get<{ data: { categories: CategoryDto[] } }>('/api/categories'),
   });
+  const roots = categoriesQuery.data?.data.categories ?? [];
 
-  const selectedCategory = (categoriesQuery.data?.data.categories ?? [])
-    .flatMap((c) => [c, ...(c.children ?? [])])
-    .find((c) => c.id === categoryId);
+  // Каскад: раздел → подраздел. При редактировании раскладываем categoryId:
+  // дочерняя → parentId+childId, корневая → только parentId («вся категория»).
+  const [parentId, setParentId] = useState(() => initial?.category?.parent?.id ?? initial?.category?.id ?? '');
+  const [childId, setChildId] = useState(() =>
+    initial?.category?.parent?.id ? initial.category.id : ''
+  );
+  const selectedParent = roots.find((c) => c.id === parentId);
+  const selectedChild = selectedParent?.children?.find((ch) => ch.id === childId);
+  // Итоговая категория: подраздел, либо весь раздел (тесты и бэкенд допускают корневую).
+  const categoryId = childId || parentId;
+  // Наследование атрибутов: атрибуты раздела + атрибуты подраздела (подраздел побеждает при совпадении ключей).
+  const childAttrs = selectedChild?.attributes ?? [];
+  const attributes: CategoryAttributeDto[] = [
+    ...(selectedParent?.attributes ?? []).filter((a) => !childAttrs.some((x) => x.key === a.key)),
+    ...childAttrs,
+  ];
 
-  const attributes = selectedCategory?.attributes ?? [];
+  const changeParent = (next: string) => {
+    if (next !== parentId && Object.values(attributeValues).some((v) => v !== '')) {
+      if (!confirm('При смене раздела введённые характеристики будут сброшены. Продолжить?')) return;
+    }
+    setParentId(next);
+    setChildId('');
+    // Сбрасываем атрибуты при смене категории, иначе отправятся чужие ключи.
+    setAttributeValues({});
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,32 +217,40 @@ export function ListingForm({ mode, initial }: Props) {
         </div>
       </div>
 
-      <div>
-        <label className="label">Категория *</label>
-        <select
-          className="input"
-          value={categoryId}
-          onChange={(e) => {
-            setCategoryId(e.target.value);
-            // Сбрасываем атрибуты при смене категории, иначе отправятся чужие ключи.
-            setAttributeValues({});
-          }}
-          required
-        >
-          <option value="">Выберите категорию</option>
-          {(categoriesQuery.data?.data.categories ?? []).map((c) => (
-            <optgroup key={c.id} label={c.name}>
-              <option value={c.id}>{c.name}</option>
-              {(c.children ?? []).map((ch) => (
-                <option key={ch.id} value={ch.id}>
-                  — {ch.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-        {errors.categoryId && <p className="mt-1 text-xs text-red-600">{errors.categoryId}</p>}
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="label">Раздел *</label>
+          <select className="input" value={parentId} onChange={(e) => changeParent(e.target.value)} required>
+            <option value="">Выберите раздел</option>
+            {roots.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Подраздел</label>
+          <select
+            className="input"
+            value={childId}
+            onChange={(e) => {
+              setChildId(e.target.value);
+              // Сбрасываем атрибуты при смене категории, иначе отправятся чужие ключи.
+              setAttributeValues({});
+            }}
+            disabled={!selectedParent || (selectedParent.children ?? []).length === 0}
+          >
+            <option value="">Вся категория «{selectedParent?.name ?? '…'}»</option>
+            {(selectedParent?.children ?? []).map((ch) => (
+              <option key={ch.id} value={ch.id}>
+                {ch.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
+      {errors.categoryId && <p className="mt-1 text-xs text-red-600">{errors.categoryId}</p>}
 
       {attributes.length > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
