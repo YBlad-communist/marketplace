@@ -4,18 +4,24 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
-import { post, ApiError } from '@/lib/api';
+import { get, post, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 
 export default function SellerConnectPage() {
   const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
   const [shopId, setShopId] = useState(user?.yookassaShopId ?? '');
   const [error, setError] = useState<string | null>(null);
 
   const connect = useMutation({
     mutationFn: (id: string) => post<{ data: { shopId: string } }>('/api/orders/seller/connect', { shopId: id }),
-    onSuccess: () => {
+    onSuccess: async () => {
       setError(null);
+      // Мутация меняет данные на сервере, но auth-store не знает об этом —
+      // без перезапроса /me форма продолжит показывать себя как неподключённую
+      // до ручной перезагрузки страницы. Тот же паттерн, что уже в Header.tsx.
+      const me = await get<{ data: { user: Parameters<typeof setUser>[0] } }>('/api/users/me');
+      setUser(me.data.user);
     },
     onError: (err) => {
       setError(err instanceof ApiError ? err.message : 'Не удалось сохранить Shop ID');
