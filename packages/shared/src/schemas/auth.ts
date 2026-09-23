@@ -79,6 +79,15 @@ export const requestVerificationSchema = z.object({
   phone: phoneSchema.optional(),
 });
 
+export const phoneChangeRequestSchema = z.object({
+  phone: phoneSchema,
+});
+
+export const phoneChangeConfirmSchema = z.object({
+  phone: phoneSchema,
+  code: z.string().length(6).regex(/^\d{6}$/),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshTokenInput = z.infer<typeof refreshTokenSchema>;
@@ -87,3 +96,5 @@ export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
 export type RequestVerificationInput = z.infer<typeof requestVerificationSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export type PhoneChangeRequestInput = z.infer<typeof phoneChangeRequestSchema>;
+export type PhoneChangeConfirmInput = z.infer<typeof phoneChangeConfirmSchema>;
