@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
+import { VerifyPhoneButton } from '@/components/VerifyPhoneButton';
 import { del, get } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { CursorPage, ListingDto } from '@/lib/types';
@@ -57,6 +58,7 @@ export default function CabinetPage() {
               <div className="font-semibold">{user?.name}</div>
               <div className="text-sm text-gray-600">{user?.email}</div>
               {user?.phone && <div className="text-sm text-gray-600">{user.phone}</div>}
+              <VerifyPhoneButton />
             </div>
             <div className="muted">
               Рейтинг: {typeof user?.rating === 'number' ? user.rating.toFixed(1) : '—'} ({user?.ratingCount ?? 0} отзывов)
