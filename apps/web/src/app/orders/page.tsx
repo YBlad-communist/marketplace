@@ -58,6 +58,9 @@ function OrderRow({
               : null}
         </div>
         <div className="text-xs text-gray-400">{formatDateTime(order.createdAt)}</div>
+        <Link href={`/orders/${order.id}`} className="text-xs text-gray-400 hover:text-brand-600 hover:underline">
+          Подробнее →
+        </Link>
       </div>
       <div className="font-semibold">{formatPrice(order.amount, order.currency)}</div>
       <span
