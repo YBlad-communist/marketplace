@@ -70,8 +70,7 @@ describeInfra('chat (integration)', () => {
     expect(history.body.data.items.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('rejects access to foreign conversation', async () => {
-    const conv = await request(app)
+  it('rejects access to foreign conversation', async () => {    const conv = await request(app)
       .post('/api/conversations')
       .set('Authorization', `Bearer ${buyerToken}`)
       .send({ listingId });
@@ -88,5 +87,58 @@ describeInfra('chat (integration)', () => {
       .get(`/api/conversations/${conversationId}/messages`)
       .set('Authorization', `Bearer ${strangerLogin.body.data.accessToken}`);
     expect(res.status).toBe(403);
+  });
+
+  it('edits own message and rejects foreign edit', async () => {
+    const conv = await request(app)
+      .post('/api/conversations')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ listingId });
+    const conversationId = conv.body.data.conversation.id;
+    const msg = await request(app)
+      .post(`/api/conversations/${conversationId}/messages`)
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ conversationId, text: 'Исходный текст' });
+    expect(msg.status).toBe(201);
+    const messageId = msg.body.data.message.id;
+
+    const edited = await request(app)
+      .patch(`/api/conversations/${conversationId}/messages/${messageId}`)
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ text: 'Отредактированный текст' });
+    expect(edited.status).toBe(200);
+    expect(edited.body.data.message.text).toBe('Отредактированный текст');
+    expect(edited.body.data.message.editedAt).toBeTruthy();
+
+    const foreign = await request(app)
+      .patch(`/api/conversations/${conversationId}/messages/${messageId}`)
+      .set('Authorization', `Bearer ${sellerToken}`)
+      .send({ text: 'Чужое редактирование' });
+    expect(foreign.status).toBe(403);
+  });
+
+  it('deletes conversation for both participants', async () => {
+    const conv = await request(app)
+      .post('/api/conversations')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ listingId });
+    const conversationId = conv.body.data.conversation.id;
+    await request(app)
+      .post(`/api/conversations/${conversationId}/messages`)
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ conversationId, text: 'Привет' });
+
+    const del = await request(app)
+      .delete(`/api/conversations/${conversationId}`)
+      .set('Authorization', `Bearer ${buyerToken}`);
+    expect(del.status).toBe(200);
+
+    // Чат пропал для обоих: история недоступна даже продавцу.
+    for (const token of [buyerToken, sellerToken]) {
+      const history = await request(app)
+        .get(`/api/conversations/${conversationId}/messages`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(history.status).toBe(404);
+    }
   });
 });

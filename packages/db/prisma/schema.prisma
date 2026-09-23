@@ -210,6 +210,9 @@ model Message {
   senderId       String
   sender         User         @relation("sender", fields: [senderId], references: [id])
   text           String
+  editedAt       DateTime?
+  imageKey       String?
+  imageThumbKey  String?
   createdAt      DateTime     @default(now())
   deletedAt      DateTime?
 
@@ -243,8 +246,8 @@ model Review {
   author     User     @relation("author", fields: [authorId], references: [id])
   revieweeId String
   reviewee   User     @relation("reviewee", fields: [revieweeId], references: [id])
-  orderId    String
-  order      Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId    String?
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   rating     Int
   text       String?
   createdAt  DateTime @default(now())

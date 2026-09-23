@@ -93,6 +93,9 @@ export function patch<T>(path: string, body: unknown): Promise<T> {
   return apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
-export function del<T>(path: string): Promise<T> {
-  return apiFetch<T>(path, { method: 'DELETE' });
+export function del<T>(path: string, body?: unknown): Promise<T> {
+  return apiFetch<T>(
+    path,
+    body === undefined ? { method: 'DELETE' } : { method: 'DELETE', body: JSON.stringify(body) }
+  );
 }

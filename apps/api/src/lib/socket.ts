@@ -13,7 +13,10 @@ import {
   createMessage,
   markRead,
   deleteMessage,
+  editMessage,
+  deleteConversation,
 } from '../services/conversationService.js';
+import { enqueueS3Delete } from '../services/notificationService.js';
 
 let io: Server | null = null;
 
@@ -70,10 +73,11 @@ export function initSocket(httpServer: http.Server): Server {
       }
     });
 
-    socket.on('message:send', async (payload: { conversationId: string; text: string }, cb) => {
+    socket.on('message:send', async (payload: { conversationId: string; text?: string; imageKey?: string }, cb) => {
       try {
         const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
-        if (!payload?.conversationId || text.length === 0 || text.length > 2000) {
+        const imageKey = typeof payload?.imageKey === 'string' && payload.imageKey.length > 0 ? payload.imageKey : undefined;
+        if (!payload?.conversationId || (imageKey && imageKey.length > 500) || text.length > 2000 || (text.length === 0 && !imageKey)) {
           cb?.({ ok: false, error: 'Некорректное сообщение' });
           return;
         }
@@ -81,6 +85,7 @@ export function initSocket(httpServer: http.Server): Server {
           conversationId: payload.conversationId,
           userId,
           text,
+          imageKey,
         });
         const participants = await participantsOf(payload.conversationId);
         socket.to(`room:${payload.conversationId}`).emit('message:new', message);
@@ -109,6 +114,43 @@ export function initSocket(httpServer: http.Server): Server {
         });
       } catch {
         // ignore
+      }
+    });
+
+    socket.on('message:edit', async (payload: { conversationId: string; messageId: string; text: string }, cb) => {
+      try {
+        const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+        if (!payload?.conversationId || !payload?.messageId || text.length === 0 || text.length > 2000) {
+          cb?.({ ok: false, error: 'Некорректное сообщение' });
+          return;
+        }
+        const message = await editMessage(payload.conversationId, payload.messageId, userId, text);
+        socket.to(`room:${payload.conversationId}`).emit('message:edited', message);
+        cb?.({ ok: true, message });
+      } catch (err) {
+        const e = err as AppError;
+        cb?.({ ok: false, error: e.message ?? 'Не удалось отредактировать сообщение' });
+      }
+    });
+
+    socket.on('conversation:delete', async (conversationId: string, cb) => {
+      try {
+        if (typeof conversationId !== 'string' || conversationId.length === 0) {
+          cb?.({ ok: false, error: 'Некорректный чат' });
+          return;
+        }
+        const { participantIds, imageKeys } = await deleteConversation(conversationId, userId);
+        socket.to(`room:${conversationId}`).emit('conversation:deleted', { conversationId });
+        for (const otherId of participantIds.filter((p) => p !== userId)) {
+          socket.to(`user:${otherId}`).emit('conversation:deleted', { conversationId });
+        }
+        if (imageKeys.length > 0) {
+          await enqueueS3Delete(imageKeys).catch(() => undefined);
+        }
+        cb?.({ ok: true });
+      } catch (err) {
+        const e = err as AppError;
+        cb?.({ ok: false, error: e.message ?? 'Не удалось удалить чат' });
       }
     });
 

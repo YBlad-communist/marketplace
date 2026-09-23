@@ -4,16 +4,22 @@ import {
   createConversationSchema,
   messagesQuerySchema,
   sendMessageSchema,
+  editMessageSchema,
   markReadSchema,
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
+import { getIO } from '../lib/socket.js';
+import { enqueueS3Delete } from '../services/notificationService.js';
 import {
   createConversation,
   getMessages,
   listConversations,
   markRead,
   createMessage,
+  editMessage,
+  deleteMessage,
+  deleteConversation,
 } from '../services/conversationService.js';
 
 const router: Router = Router();
@@ -58,9 +64,63 @@ router.post('/:id/messages', authenticate, validate(sendMessageSchema), async (r
     const message = await createMessage({
       conversationId: req.params.id,
       userId: req.userId!,
-      text: req.body.text,
+      text: req.body.text ?? '',
+      imageKey: req.body.imageKey,
     });
     res.status(201).json({ data: { message } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/:id/messages/:messageId', authenticate, validate(editMessageSchema), async (req, res, next) => {
+  try {
+    const message = await editMessage(req.params.id, req.params.messageId, req.userId!, req.body.text);
+    // В тестах сокет не инициализирован — эмитт best-effort.
+    try {
+      getIO().to(`room:${req.params.id}`).emit('message:edited', message);
+    } catch {
+      // ignore
+    }
+    res.json({ data: { message } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/:id/messages/:messageId', authenticate, async (req, res, next) => {
+  try {
+    await deleteMessage(req.params.id, req.params.messageId, req.userId!);
+    try {
+      getIO().to(`room:${req.params.id}`).emit('message:deleted', {
+        conversationId: req.params.id,
+        messageId: req.params.messageId,
+      });
+    } catch {
+      // ignore
+    }
+    res.json({ data: { success: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/:id', authenticate, async (req, res, next) => {
+  try {
+    const { participantIds, imageKeys } = await deleteConversation(req.params.id, req.userId!);
+    try {
+      const io = getIO();
+      io.to(`room:${req.params.id}`).emit('conversation:deleted', { conversationId: req.params.id });
+      for (const otherId of participantIds.filter((p) => p !== req.userId)) {
+        io.to(`user:${otherId}`).emit('conversation:deleted', { conversationId: req.params.id });
+      }
+    } catch {
+      // ignore
+    }
+    if (imageKeys.length > 0) {
+      await enqueueS3Delete(imageKeys).catch(() => undefined);
+    }
+    res.json({ data: { success: true } });
   } catch (err) {
     next(err);
   }

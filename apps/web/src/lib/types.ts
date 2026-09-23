@@ -88,6 +88,11 @@ export interface MessageDto {
   text: string;
   createdAt: string;
   deletedAt?: string | null;
+  editedAt?: string | null;
+  imageKey?: string | null;
+  imageThumbKey?: string | null;
+  imageUrl?: string | null;
+  imageThumbUrl?: string | null;
 }
 
 export interface OrderDto {

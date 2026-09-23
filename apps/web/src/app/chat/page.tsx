@@ -2,17 +2,24 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
-import { get } from '@/lib/api';
+import { get, post } from '@/lib/api';
 import { connectSocket } from '@/lib/socket';
 import { useAuthStore } from '@/lib/auth-store';
 import { ConversationDto, MessageDto } from '@/lib/types';
 import { cn, formatDateTime, formatPrice } from '@/lib/format';
 
+interface ContextMenuState {
+  x: number;
+  y: number;
+  message: MessageDto;
+}
+
 function ChatContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
   const userId = useAuthStore((s) => s.user?.id);
   const selectedId = searchParams.get('conv');
 
@@ -20,9 +27,14 @@ function ChatContent() {
   const [messages, setMessages] = useState<Record<string, MessageDto[]>>({});
   const [text, setText] = useState('');
   const [typing, setTyping] = useState<Record<string, boolean>>({});
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastTypingSent = useRef(0);
   const typingOffTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const conversationsQuery = useQuery({
     queryKey: ['conversations'],
@@ -44,6 +56,32 @@ function ChatContent() {
   useEffect(() => {
     if (selectedId && selectedId !== activeId) setActiveId(selectedId);
   }, [selectedId, activeId]);
+
+  // Удаление чата собеседником: убираем из списка и закрываем, если открыт.
+  useEffect(() => {
+    const socket = connectSocket();
+    const onConversationDeleted = (p: { conversationId: string }) => {
+      queryClient.setQueryData<{ data: { items: ConversationDto[] } }>(['conversations'], (old) =>
+        old ? { data: { items: old.data.items.filter((c) => c.id !== p.conversationId) } } : old
+      );
+      setMessages((m) => {
+        const next = { ...m };
+        delete next[p.conversationId];
+        return next;
+      });
+      setActiveId((current) => {
+        if (current === p.conversationId) {
+          router.replace('/chat', { scroll: false });
+          return null;
+        }
+        return current;
+      });
+    };
+    socket.on('conversation:deleted', onConversationDeleted);
+    return () => {
+      socket.off('conversation:deleted', onConversationDeleted);
+    };
+  }, [queryClient, router]);
 
   useEffect(() => {
     if (!activeId) return;
@@ -73,16 +111,45 @@ function ChatContent() {
         ),
       }));
     };
+    const onMessageEdited = (msg: MessageDto) => {
+      if (msg.conversationId !== activeId) return;
+      setMessages((m) => ({
+        ...m,
+        [msg.conversationId]: (m[msg.conversationId] ?? []).map((x) => (x.id === msg.id ? msg : x)),
+      }));
+    };
 
     socket.on('message:new', onNewMessage);
     socket.on('typing', onTyping);
     socket.on('message:deleted', onMessageDeleted);
+    socket.on('message:edited', onMessageEdited);
     return () => {
       socket.off('message:new', onNewMessage);
       socket.off('typing', onTyping);
       socket.off('message:deleted', onMessageDeleted);
+      socket.off('message:edited', onMessageEdited);
     };
   }, [activeId]);
+
+  // Закрытие ПКМ-меню по клику мимо, скроллу и Escape.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        close();
+        setEditingId(null);
+      }
+    };
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -102,20 +169,130 @@ function ChatContent() {
     });
   };
 
-  const deleteMessage = (messageId: string) => {
+  const extFor = (name: string): string => {
+    const ext = name.split('.').pop()?.toLowerCase() ?? 'jpg';
+    return ['.jpg', '.jpeg', '.png', '.webp'].includes(`.${ext}`) ? `.${ext}` : '.jpg';
+  };
+
+  const sendPhoto = async (file: File) => {
     if (!activeId) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return;
+    if (file.size > 5 * 1024 * 1024) return;
+    setUploadingPhoto(true);
+    try {
+      const presign = await post<{ data: { key: string; uploadUrl: string } }>(
+        '/api/uploads/images/presign',
+        { scope: 'chat', mime: file.type, extension: extFor(file.name), sizeBytes: file.size }
+      );
+      const res = await fetch(presign.data.uploadUrl, { method: 'PUT', body: file });
+      if (!res.ok) throw new Error('upload failed');
+      const caption = text.trim();
+      setText('');
+      const socket = connectSocket();
+      socket.emit(
+        'message:send',
+        { conversationId: activeId, text: caption, imageKey: presign.data.key },
+        (ack: { ok: boolean; error?: string; message?: MessageDto }) => {
+          if (ack.ok && ack.message) {
+            setMessages((m) => ({ ...m, [activeId]: [...(m[activeId] ?? []), ack.message!] }));
+          } else {
+            if (caption) setText(caption);
+            alert(ack.error ?? 'Не удалось отправить фото');
+          }
+        }
+      );
+    } catch {
+      alert('Не удалось загрузить фото');
+    } finally {
+      setUploadingPhoto(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const openMenu = (e: React.MouseEvent, message: MessageDto) => {
+    e.preventDefault();
+    if (message.deletedAt) return;
+    const mine = message.senderId === userId;
+    if (!mine && !message.text) return;
+    // Меню не вылезает за правый/нижний край экрана.
+    setMenu({
+      x: Math.min(e.clientX, window.innerWidth - 200),
+      y: Math.min(e.clientY, window.innerHeight - 140),
+      message,
+    });
+  };
+
+  const startEdit = (message: MessageDto) => {
+    setEditingId(message.id);
+    setEditText(message.text);
+    setMenu(null);
+  };
+
+  const saveEdit = () => {
+    if (!activeId || !editingId || !editText.trim()) return;
+    const socket = connectSocket();
+    const id = editingId;
+    const newText = editText.trim();
+    setEditingId(null);
+    socket.emit(
+      'message:edit',
+      { conversationId: activeId, messageId: id, text: newText },
+      (res: { ok: boolean; error?: string; message?: MessageDto }) => {
+        if (res.ok && res.message) {
+          const updated = res.message;
+          setMessages((m) => ({
+            ...m,
+            [activeId]: (m[activeId] ?? []).map((x) => (x.id === id ? updated : x)),
+          }));
+        } else {
+          alert(res.error ?? 'Не удалось отредактировать сообщение');
+        }
+      }
+    );
+  };
+
+  const deleteMessage = (message: MessageDto) => {
+    if (!activeId) return;
+    setMenu(null);
     if (!confirm('Удалить сообщение?')) return;
     const socket = connectSocket();
-    socket.emit('message:delete', { conversationId: activeId, messageId }, (res: { ok: boolean }) => {
+    socket.emit(
+      'message:delete',
+      { conversationId: activeId, messageId: message.id },
+      (res: { ok: boolean }) => {
+        if (res.ok) {
+          setMessages((m) => ({
+            ...m,
+            [activeId]: (m[activeId] ?? []).map((msg) =>
+              msg.id === message.id
+                ? { ...msg, text: 'Сообщение удалено', deletedAt: new Date().toISOString() }
+                : msg
+            ),
+          }));
+        }
+      }
+    );
+  };
+
+  const deleteConversation = () => {
+    if (!activeId) return;
+    if (!confirm('Удалить чат для обоих участников? Сообщения и фото будут удалены безвозвратно.')) return;
+    const socket = connectSocket();
+    const id = activeId;
+    socket.emit('conversation:delete', id, (res: { ok: boolean; error?: string }) => {
       if (res.ok) {
-        setMessages((m) => ({
-          ...m,
-          [activeId]: (m[activeId] ?? []).map((msg) =>
-            msg.id === messageId
-              ? { ...msg, text: 'Сообщение удалено', deletedAt: new Date().toISOString() }
-              : msg
-          ),
-        }));
+        queryClient.setQueryData<{ data: { items: ConversationDto[] } }>(['conversations'], (old) =>
+          old ? { data: { items: old.data.items.filter((c) => c.id !== id) } } : old
+        );
+        setMessages((m) => {
+          const next = { ...m };
+          delete next[id];
+          return next;
+        });
+        setActiveId(null);
+        router.replace('/chat', { scroll: false });
+      } else {
+        alert(res.error ?? 'Не удалось удалить чат');
       }
     });
   };
@@ -134,6 +311,13 @@ function ChatContent() {
       () => socket.emit('typing', { conversationId: activeId, isTyping: false }),
       1500
     );
+  };
+
+  const previewText = (c: ConversationDto): string => {
+    if (!c.lastMessage) return 'Нет сообщений';
+    if (c.lastMessage.deletedAt) return 'Сообщение удалено';
+    if (c.lastMessage.text) return c.lastMessage.text;
+    return '📷 Фото';
   };
 
   const activeMessages = activeId ? messages[activeId] ?? [] : [];
@@ -163,9 +347,7 @@ function ChatContent() {
                     )}
                   </div>
                   <div className="truncate text-xs text-gray-500">{c.listing.title}</div>
-                  <div className="mt-1 truncate text-xs text-gray-400">
-                    {c.lastMessage ? c.lastMessage.text : 'Нет сообщений'}
-                  </div>
+                  <div className="mt-1 truncate text-xs text-gray-400">{previewText(c)}</div>
                   {c.id === activeId && (
                     <span
                       aria-hidden="true"
@@ -182,13 +364,23 @@ function ChatContent() {
         <div className="card flex h-[70vh] flex-1 flex-col">
           {activeId ? (
             <>
-              <div className="border-b border-gray-100 p-4 text-sm">
-                <div className="font-medium">{otherName}</div>
-                {activeConv && (
-                  <div className="text-xs text-gray-500">
-                    {activeConv.listing.title} · {formatPrice(activeConv.listing.price)}
-                  </div>
-                )}
+              <div className="flex items-center justify-between border-b border-gray-100 p-4 text-sm">
+                <div>
+                  <div className="font-medium">{otherName}</div>
+                  {activeConv && (
+                    <div className="text-xs text-gray-500">
+                      {activeConv.listing.title} · {formatPrice(activeConv.listing.price)}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={deleteConversation}
+                  className="text-xs text-gray-400 hover:text-red-600"
+                  title="Удалить чат для обоих участников"
+                >
+                  Удалить чат
+                </button>
               </div>
               <div className="flex-1 space-y-3 overflow-y-auto p-4">
                 {activeMessages.map((m, i) => {
@@ -198,6 +390,7 @@ function ChatContent() {
                   const sender = activeConv?.participants.find((p) => p.id === m.senderId);
                   const name = sender?.name ?? 'Собеседник';
                   const avatar = sender?.avatarUrl;
+                  const isEditing = editingId === m.id;
                   return (
                     <div key={m.id} className={cn('flex items-end gap-2', mine ? 'justify-end' : 'justify-start')}>
                       {!mine && showHeader && (
@@ -211,11 +404,12 @@ function ChatContent() {
                         </div>
                       )}
                       {!mine && !showHeader && <div className="w-8 shrink-0" />}
-                      <div className={cn('group relative flex max-w-[70%] flex-col', mine ? 'items-end' : 'items-start')}>
+                      <div className={cn('flex max-w-[70%] flex-col', mine ? 'items-end' : 'items-start')}>
                         {!mine && showHeader && (
                           <div className="mb-0.5 px-1 text-xs font-medium text-gray-500">{name}</div>
                         )}
                         <div
+                          onContextMenu={(e) => openMenu(e, m)}
                           className={cn(
                             'break-words rounded-2xl px-3 py-2 text-sm shadow-sm',
                             mine
@@ -224,7 +418,55 @@ function ChatContent() {
                             m.deletedAt && 'italic opacity-60'
                           )}
                         >
-                          {m.text}
+                          {(m.imageThumbUrl ?? m.imageUrl) && !m.deletedAt && (
+                            <a
+                              href={m.imageUrl ?? undefined}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={m.imageThumbUrl ?? m.imageUrl ?? ''}
+                                alt=""
+                                className="mb-1 max-h-64 rounded-lg object-cover"
+                              />
+                            </a>
+                          )}
+                          {isEditing ? (
+                            <div className="min-w-48" onClick={(e) => e.stopPropagation()}>
+                              <textarea
+                                autoFocus
+                                className="w-full rounded-lg border border-white/40 bg-white/10 p-2 text-sm text-inherit outline-none"
+                                rows={2}
+                                value={editText}
+                                onChange={(e) => setEditText(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    saveEdit();
+                                  }
+                                }}
+                              />
+                              <div className="mt-1 flex gap-2 text-xs">
+                                <button type="button" className="underline" onClick={saveEdit}>
+                                  Сохранить
+                                </button>
+                                <button type="button" className="underline opacity-70" onClick={() => setEditingId(null)}>
+                                  Отмена
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              {m.text}
+                              {m.editedAt && !m.deletedAt && (
+                                <span className={cn('ml-1 text-[10px]', mine ? 'text-white/70' : 'text-gray-400')}>
+                                  (изм.)
+                                </span>
+                              )}
+                            </>
+                          )}
                           <div
                             className={cn(
                               'mt-1 text-right text-[10px] leading-none',
@@ -234,16 +476,6 @@ function ChatContent() {
                             {formatDateTime(m.createdAt)}
                           </div>
                         </div>
-                        {mine && !m.deletedAt && (
-                          <button
-                            type="button"
-                            onClick={() => deleteMessage(m.id)}
-                            className="absolute -left-6 top-1 hidden text-xs text-gray-400 hover:text-red-600 group-hover:block"
-                            aria-label="Удалить сообщение"
-                          >
-                            ✕
-                          </button>
-                        )}
                       </div>
                     </div>
                   );
@@ -259,6 +491,19 @@ function ChatContent() {
               </div>
               <div className="border-t border-gray-100 p-3">
                 <div className="flex gap-2">
+                  <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void sendPhoto(f);
+                  }} />
+                  <button
+                    type="button"
+                    className="btn-secondary shrink-0"
+                    title="Прикрепить фото"
+                    disabled={uploadingPhoto}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {uploadingPhoto ? '…' : '📷'}
+                  </button>
                   <input
                     className="input"
                     placeholder="Сообщение…"
@@ -280,6 +525,45 @@ function ChatContent() {
           )}
         </div>
       </main>
+
+      {menu && (
+        <div
+          className="fixed z-50 min-w-44 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-xl"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {menu.message.senderId === userId && (
+            <>
+              <button
+                type="button"
+                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+                onClick={() => startEdit(menu.message)}
+              >
+                Редактировать
+              </button>
+              <button
+                type="button"
+                className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100"
+                onClick={() => deleteMessage(menu.message)}
+              >
+                Удалить
+              </button>
+            </>
+          )}
+          {menu.message.text && (
+            <button
+              type="button"
+              className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100"
+              onClick={() => {
+                void navigator.clipboard?.writeText(menu.message.text).catch(() => undefined);
+                setMenu(null);
+              }}
+            >
+              Копировать текст
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

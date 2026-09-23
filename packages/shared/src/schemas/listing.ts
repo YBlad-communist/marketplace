@@ -80,6 +80,9 @@ export const listingIdSchema = z.object({
 
 export const imagePresignSchema = z.object({
   listingId: z.string().cuid().optional(),
+  // Scope изолирует presign-сеты в Redis: листинг/аватар/чат не должны
+  // пересекаться (создание листинга делает DEL всего сета пользователя).
+  scope: z.enum(['listing', 'avatar', 'chat']).default('listing'),
   mime: z.enum(ALLOWED_IMAGE_MIME),
   extension: z.enum(ALLOWED_IMAGE_EXT),
   sizeBytes: z.number().int().min(1).max(5 * 1024 * 1024),

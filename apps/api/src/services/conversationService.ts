@@ -1,6 +1,24 @@
 import { prisma } from '@marketplace/db';
 import { AppError, errorCodes } from '@marketplace/shared';
+import { env } from '../config.js';
 import { getRedis } from '../lib/redis.js';
+import { deleteObject, verifyImageObject } from '../lib/s3.js';
+import { processImage } from './imageService.js';
+
+/**
+ * Web-клиент не знает S3-адрес, поэтому к ключам фото прикладываем готовые URL.
+ */
+function withImageUrls<T extends { imageKey: string | null; imageThumbKey: string | null }>(m: T) {
+  return {
+    ...m,
+    imageUrl: m.imageKey ? `${env.S3_PUBLIC_BASE_URL}/${m.imageKey}` : null,
+    imageThumbUrl: m.imageThumbKey ? `${env.S3_PUBLIC_BASE_URL}/${m.imageThumbKey}` : null,
+  };
+}
+
+function presentMessage<T extends { deletedAt: Date | null; text: string; imageKey: string | null; imageThumbKey: string | null }>(m: T) {
+  return m.deletedAt ? withImageUrls({ ...m, text: 'Сообщение удалено' }) : withImageUrls(m);
+}
 
 const MSG_RATE_WINDOW = 10_000;
 const MSG_RATE_MAX = 10;
@@ -75,7 +93,7 @@ export async function listConversations(userId: string, cursor?: string, limit =
 
   const items = await Promise.all(
     page.map(async (c) => {
-      const lastMessage = c.messages[0] ? (c.messages[0].deletedAt ? { ...c.messages[0], text: 'Сообщение удалено' } : c.messages[0]) : null;
+      const lastMessage = c.messages[0] ? presentMessage(c.messages[0]) : null;
       const lastReadAt = lastRead.get(c.id) ?? 0;
       const unreadCount =
         lastMessage && new Date(lastMessage.createdAt).getTime() > lastReadAt
@@ -114,7 +132,7 @@ export async function getMessages(conversationId: string, userId: string, cursor
   const page = messages
     .slice(0, take - 1)
     .reverse()
-    .map((m) => (m.deletedAt ? { ...m, text: 'Сообщение удалено' } : m));
+    .map((m) => presentMessage(m));
   return {
     items: page,
     nextCursor: hasMore && page.length > 0 ? page[0].id : null,
@@ -135,6 +153,41 @@ export async function deleteMessage(conversationId: string, messageId: string, m
   });
 }
 
+export async function editMessage(conversationId: string, messageId: string, msgUserId: string, text: string) {
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message || message.conversationId !== conversationId) {
+    throw new AppError(errorCodes.NOT_FOUND, 'Сообщение не найдено', 404);
+  }
+  if (message.senderId !== msgUserId) {
+    throw new AppError(errorCodes.FORBIDDEN, 'Редактировать можно только свои сообщения', 403);
+  }
+  if (message.deletedAt) {
+    throw new AppError(errorCodes.CONFLICT, 'Удалённое сообщение нельзя редактировать', 409);
+  }
+  const updated = await prisma.message.update({
+    where: { id: messageId },
+    data: { text, editedAt: new Date() },
+  });
+  return withImageUrls(updated);
+}
+
+/**
+ * Удаление чата ДЛЯ ОБОИХ участников (hard delete): каскадом уходят
+ * сообщения и участники. Возвращает id участников (для сокет-эмитта)
+ * и S3-ключи фото (для фонового удаления из хранилища).
+ */
+export async function deleteConversation(conversationId: string, userId: string) {
+  const conversation = await assertParticipant(conversationId, userId);
+  const messages = await prisma.message.findMany({
+    where: { conversationId },
+    select: { imageKey: true, imageThumbKey: true },
+  });
+  const imageKeys = messages.flatMap((m) => [m.imageKey, m.imageThumbKey].filter((k): k is string => !!k));
+  const participantIds = conversation.participants.map((p) => p.userId);
+  await prisma.conversation.delete({ where: { id: conversationId } });
+  return { participantIds, imageKeys };
+}
+
 export async function markRead(conversationId: string, userId: string): Promise<void> {
   await assertParticipant(conversationId, userId);
   await prisma.conversationParticipant.update({
@@ -153,15 +206,35 @@ export async function checkMessageRate(userId: string): Promise<void> {
   }
 }
 
-export async function createMessage(input: { conversationId: string; userId: string; text: string }) {
+export async function createMessage(input: { conversationId: string; userId: string; text: string; imageKey?: string }) {
   await assertParticipant(input.conversationId, input.userId);
   await checkMessageRate(input.userId);
+  // Фото в чате: ключ обязан быть из чат-presign-сета (scope=chat), иначе
+  // чужой ключ из сета листингов позволил бы прикрепить чужое фото.
+  let imageKey: string | null = null;
+  let imageThumbKey: string | null = null;
+  if (input.imageKey) {
+    const redis = getRedis();
+    const setKey = `presign:chat:user:${input.userId}`;
+    const isIssued = await redis.sismember(setKey, input.imageKey);
+    if (!isIssued) {
+      throw new AppError(errorCodes.VALIDATION, 'Файл не был загружен через presigned URL', 400);
+    }
+    await redis.srem(setKey, input.imageKey);
+    await verifyImageObject(input.imageKey);
+    const processed = await processImage(input.imageKey);
+    await deleteObject(input.imageKey);
+    imageKey = processed.fullKey;
+    imageThumbKey = processed.thumbKey;
+  }
   const [message] = await prisma.$transaction([
     prisma.message.create({
       data: {
         conversationId: input.conversationId,
         senderId: input.userId,
         text: input.text,
+        imageKey,
+        imageThumbKey,
       },
       include: { sender: { select: { id: true, name: true } } },
     }),
@@ -170,5 +243,5 @@ export async function createMessage(input: { conversationId: string; userId: str
       data: { updatedAt: new Date() },
     }),
   ]);
-  return message;
+  return withImageUrls(message);
 }
