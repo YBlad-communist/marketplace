@@ -16,6 +16,10 @@ const nextConfig = {
     ],
   },
   async headers() {
+    // Строгий CSP — только для production: в dev-режиме Next.js сам
+    // инжектит inline-скрипты и использует eval (react-refresh/HMR),
+    // поэтому там эти заголовки ломали бы страницу (см. ошибки CSP в консоли).
+    if (process.env.NODE_ENV !== 'production') return [];
     return [
       {
         source: '/:path*',
