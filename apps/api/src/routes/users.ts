@@ -4,6 +4,7 @@ import {
   usersMeUpdateSchema,
   phoneChangeRequestSchema,
   phoneChangeConfirmSchema,
+  avatarConfirmSchema,
   AppError,
   errorCodes,
 } from '@marketplace/shared';
@@ -12,6 +13,9 @@ import { authenticate } from '../middleware/auth.js';
 import { publicUser } from '../services/authService.js';
 import { assertOtpSendAllowed, createVerificationCode, verifyCode } from '../services/verificationService.js';
 import { enqueueSms } from '../services/notificationService.js';
+import { deleteObject, verifyImageObject } from '../lib/s3.js';
+import { processImage } from '../services/imageService.js';
+import { getRedis } from '../lib/redis.js';
 
 const router: Router = Router();
 
@@ -68,6 +72,29 @@ router.post('/me/phone/confirm', authenticate, validate(phoneChangeConfirmSchema
     const user = await prisma.user.update({
       where: { id: req.userId },
       data: { phone, phoneVerifiedAt: new Date() },
+    });
+    res.json({ data: { user: publicUser(user) } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/me/avatar/confirm', authenticate, validate(avatarConfirmSchema), async (req, res, next) => {
+  try {
+    const { key } = req.body;
+    const redis = getRedis();
+    const setKey = `presign:user:${req.userId}`;
+    const isIssued = await redis.sismember(setKey, key);
+    if (!isIssued) {
+      throw new AppError(errorCodes.VALIDATION, 'Файл не был загружен через presigned URL', 400);
+    }
+    await redis.srem(setKey, key);
+    await verifyImageObject(key);
+    const processed = await processImage(key);
+    await deleteObject(key);
+    const user = await prisma.user.update({
+      where: { id: req.userId },
+      data: { avatarUrl: processed.publicUrl },
     });
     res.json({ data: { user: publicUser(user) } });
   } catch (err) {

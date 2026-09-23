@@ -2,8 +2,10 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
+import { ProfileEditForm } from '@/components/ProfileEditForm';
 import { VerifyPhoneButton } from '@/components/VerifyPhoneButton';
 import { del, get } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
@@ -13,6 +15,7 @@ import { formatPrice } from '@/lib/format';
 export default function CabinetPage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+  const [editingProfile, setEditingProfile] = useState(false);
 
   const myListingsQuery = useQuery({
     queryKey: ['my-listings'],
@@ -50,30 +53,46 @@ export default function CabinetPage() {
         <h1 className="section-title mb-6">Личный кабинет</h1>
 
         <div className="card mb-8 p-5">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xl font-bold text-white" aria-hidden>
-              {(user?.name?.[0] ?? '?').toUpperCase()}
-            </div>
-            <div>
-              <div className="font-semibold">{user?.name}</div>
-              <div className="text-sm text-gray-600">{user?.email}</div>
-              {user?.phone && <div className="text-sm text-gray-600">{user.phone}</div>}
-              <VerifyPhoneButton />
-            </div>
-            <div className="muted">
-              Рейтинг: {typeof user?.rating === 'number' ? user.rating.toFixed(1) : '—'} ({user?.ratingCount ?? 0} отзывов)
-            </div>
-            {user?.yookassaOnboarded ? (
-              <span className="badge-green">Выплаты подключены</span>
-            ) : (
-              <Link href="/seller/connect" className="btn-secondary text-xs">
-                Подключить выплаты (ЮKassa)
+          {editingProfile ? (
+            <ProfileEditForm onClose={() => setEditingProfile(false)} />
+          ) : (
+            <div className="flex flex-wrap items-center gap-4">
+              <div
+                className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-brand-600 text-xl font-bold text-white"
+                aria-hidden
+              >
+                {user?.avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={user.avatarUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  (user?.name?.[0] ?? '?').toUpperCase()
+                )}
+              </div>
+              <div>
+                <div className="font-semibold">{user?.name}</div>
+                <div className="text-sm text-gray-600">{user?.email}</div>
+                {user?.phone && <div className="text-sm text-gray-600">{user.phone}</div>}
+                <VerifyPhoneButton />
+              </div>
+              <div className="muted">
+                Рейтинг: {typeof user?.rating === 'number' ? user.rating.toFixed(1) : '—'} ({user?.ratingCount ?? 0}{' '}
+                отзывов)
+              </div>
+              <button type="button" className="btn-secondary text-xs" onClick={() => setEditingProfile(true)}>
+                Редактировать профиль
+              </button>
+              {user?.yookassaOnboarded ? (
+                <span className="badge-green">Выплаты подключены</span>
+              ) : (
+                <Link href="/seller/connect" className="btn-secondary text-xs">
+                  Подключить выплаты (ЮKassa)
+                </Link>
+              )}
+              <Link href="/cabinet/sessions" className="btn-secondary text-xs">
+                Активные сессии
               </Link>
-            )}
-            <Link href="/cabinet/sessions" className="btn-secondary text-xs">
-              Активные сессии
-            </Link>
-          </div>
+            </div>
+          )}
         </div>
 
         <h2 className="mb-4 text-lg font-semibold">Мои объявления</h2>

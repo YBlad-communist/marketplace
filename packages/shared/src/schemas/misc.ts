@@ -55,6 +55,10 @@ export const reviewQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
+export const avatarConfirmSchema = z.object({
+  key: z.string().min(1).max(500),
+});
+
 export const usersMeUpdateSchema = z
   .object({
     name: z.string().trim().min(2).max(80).optional(),
@@ -73,3 +77,4 @@ export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 export type ReviewCreateInput = z.infer<typeof reviewCreateSchema>;
 export type ReportCreateInput = z.infer<typeof reportCreateSchema>;
 export type UsersMeUpdateInput = z.infer<typeof usersMeUpdateSchema>;
+export type AvatarConfirmInput = z.infer<typeof avatarConfirmSchema>;
