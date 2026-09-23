@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
@@ -322,8 +323,8 @@ function ChatContent() {
 
   const activeMessages = activeId ? messages[activeId] ?? [] : [];
   const activeConv = conversations.find((c) => c.id === activeId);
-  const otherName =
-    activeConv?.participants.find((p) => p.id !== userId)?.name ?? 'Собеседник';
+  const otherParticipant = activeConv?.participants.find((p) => p.id !== userId);
+  const otherName = otherParticipant?.name ?? 'Собеседник';
 
   return (
     <div>
@@ -365,13 +366,39 @@ function ChatContent() {
           {activeId ? (
             <>
               <div className="flex items-center justify-between border-b border-border p-4 text-sm">
-                <div>
-                  <div className="font-medium">{otherName}</div>
-                  {activeConv && (
-                    <div className="text-xs text-textSecondary">
-                      {activeConv.listing.title} · {formatPrice(activeConv.listing.price)}
-                    </div>
+                <div className="flex min-w-0 items-center gap-3">
+                  {otherParticipant && (
+                    <Link
+                      href={`/users/${otherParticipant.id}`}
+                      aria-label={`Профиль пользователя ${otherName}`}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-surfaceMuted text-sm font-bold text-textSecondary transition-colors hover:ring-2 hover:ring-focus"
+                    >
+                      {otherParticipant.avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={otherParticipant.avatarUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        (otherName[0] ?? '?').toUpperCase()
+                      )}
+                    </Link>
                   )}
+                  <div className="min-w-0">
+                    {otherParticipant ? (
+                      <Link
+                        href={`/users/${otherParticipant.id}`}
+                        title="Открыть профиль"
+                        className="block truncate font-medium hover:text-accentHover hover:underline"
+                      >
+                        {otherName}
+                      </Link>
+                    ) : (
+                      <div className="font-medium">{otherName}</div>
+                    )}
+                    {activeConv && (
+                      <div className="truncate text-xs text-textSecondary">
+                        {activeConv.listing.title} · {formatPrice(activeConv.listing.price)}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <button
                   type="button"
