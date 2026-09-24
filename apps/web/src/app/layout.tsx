@@ -4,7 +4,7 @@ import './globals.css';
 import { QueryProvider } from '@/lib/query-provider';
 import { RouteProgress } from '@/components/RouteProgress';
 import { PageTransition } from '@/components/PageTransition';
-import { Footer } from '@/components/Footer';
+import { SiteChrome } from '@/components/SiteChrome';
 import { MobileNav } from '@/components/MobileNav';
 import { ToastProvider } from '@/components/ui/Toast';
 
@@ -23,10 +23,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <QueryProvider>
           <ToastProvider>
             <div className="flex min-h-screen flex-col">
-              <PageTransition>
-                <div className="pb-20 md:pb-0">{children}</div>
-              </PageTransition>
-              <Footer />
+              <PageTransition>{children}</PageTransition>
+              <SiteChrome />
               <MobileNav />
             </div>
           </ToastProvider>
