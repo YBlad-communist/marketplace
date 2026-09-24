@@ -65,8 +65,15 @@ export function ChatNotifier() {
   useEffect(() => {
     if (!userId) return;
     const socket = connectSocket();
+    // Тот же двойной message:new (комната + личка) — иначе двойной тост и двойной писк.
+    let lastId: string | null = null;
+    let lastAt = 0;
     const onNew = (msg: MessageDto) => {
       if (msg.senderId === userId) return;
+      const now = Date.now();
+      if (msg.id === lastId && now - lastAt < 5000) return;
+      lastId = msg.id;
+      lastAt = now;
       void queryClient.invalidateQueries({ queryKey: ['conversations'] });
       // Открытый диалог сам показывает сообщение и гасит счётчик — не шумим.
       if (pathRef.current === `/chat/${msg.conversationId}`) return;

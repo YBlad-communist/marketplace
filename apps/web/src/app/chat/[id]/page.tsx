@@ -60,7 +60,17 @@ export default function ChatConversationPage() {
   const lastTypingSent = useRef(0);
   const typingOffTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const anchorRef = useRef<HTMLDivElement>(null);
+
+  // DECISION: страница чата — ровно один экран без внешнего скролла: лочим body,
+  // иначе клавиатура/свайпы сдвигают шапку и кнопку назад. scrollIntoView на фокусе
+  // поля ввода НЕ делаем — он и был причиной «съезжания» верха (скроллил документ).
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
 
   const conversationsQuery = useQuery({
     queryKey: ['conversations'],
@@ -111,9 +121,18 @@ export default function ChatConversationPage() {
 
     const onNewMessage = (msg: MessageDto) => {
       if (msg.conversationId !== id) return;
-      const near = isNearBottom();
-      setMessages((m) => [...m, msg]);
-      if (near) {
+      // DECISION: сервер шлёт message:new дважды (комната чата + личная комната юзера),
+      // сокет состоит в обеих — отсекаем повтор по id, иначе сообщение двоится до перезагрузки.
+      let duplicate = false;
+      setMessages((m) => {
+        if (m.some((x) => x.id === msg.id)) {
+          duplicate = true;
+          return m;
+        }
+        return [...m, msg];
+      });
+      if (duplicate) return;
+      if (isNearBottom()) {
         requestAnimationFrame(() => scrollToBottom(true));
       } else {
         setNewBelow((n) => n + 1);
@@ -362,10 +381,6 @@ export default function ChatConversationPage() {
     );
   };
 
-  const focusScroll = () => {
-    anchorRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  };
-
   // DECISION: сервер не отдаёт статусы доставки/прочтения — «прочитано» считаем,
   // если собеседник написал что-то позже (явно видел переписку).
   const otherAfter = useMemo(() => {
@@ -531,10 +546,8 @@ export default function ChatConversationPage() {
               onSend={send}
               onAttach={() => fileRef.current?.click()}
               onTyping={onTypingStart}
-              onFocusScroll={focusScroll}
               uploading={uploadingPhoto}
             />
-            <div ref={anchorRef} aria-hidden className="h-0" />
           </div>
         </div>
       </main>

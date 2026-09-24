@@ -16,6 +16,15 @@ function ChatListContent() {
     if (conv) router.replace(`/chat/${conv}`);
   }, [searchParams, router]);
 
+  // Страница-список тоже без внешнего скролла.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
   return (
     <div>
       <Header />

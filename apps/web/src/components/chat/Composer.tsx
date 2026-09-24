@@ -10,11 +10,10 @@ interface Props {
   onSend: () => void;
   onAttach: () => void;
   onTyping: () => void;
-  onFocusScroll: () => void;
   uploading: boolean;
 }
 
-export function Composer({ value, onChange, onSend, onAttach, onTyping, onFocusScroll, uploading }: Props) {
+export function Composer({ value, onChange, onSend, onAttach, onTyping, uploading }: Props) {
   const { toast } = useToast();
   const areaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -59,7 +58,6 @@ export function Composer({ value, onChange, onSend, onAttach, onTyping, onFocusS
             onChange(e.target.value);
             onTyping();
           }}
-          onFocus={onFocusScroll}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
