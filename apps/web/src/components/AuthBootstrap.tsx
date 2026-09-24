@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { get } from '@/lib/api';
+import { ApiError, get } from '@/lib/api';
 import { CurrentUser, useAuthStore } from '@/lib/auth-store';
 
 /**
@@ -21,8 +21,13 @@ export function AuthBootstrap() {
       .then((r) => {
         if (!cancelled) setUser(r.data.user);
       })
-      .catch(() => {
-        if (!cancelled) setUser(null);
+      .catch((err) => {
+        if (cancelled) return;
+        // DECISION: выкидываем из аккаунта только при честном 401 (сессия реально
+        // мертва). При сетевом сбое fetch бросает TypeError, а не ApiError —
+        // тогда оставляем юзера из localStorage, иначе любое пропадание сети
+        // на телефоне «разлогинивало» при обновлении страницы.
+        if (err instanceof ApiError) setUser(null);
       })
       .finally(() => {
         if (!cancelled) setChecked(true);
