@@ -34,9 +34,10 @@ export function ChatHeader({
     };
   }, [menuOpen]);
 
+  // DECISION: стрелка всегда ведёт в список чатов, а не по истории назад —
+  // иначе из пуш-перехода или прямого линка можно улететь вообще с сайта.
   const back = () => {
-    if (window.history.length > 1) router.back();
-    else router.push('/chat');
+    router.push('/chat');
   };
 
   return (

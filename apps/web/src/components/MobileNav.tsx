@@ -12,11 +12,10 @@ function HomeIcon({ active }: { active: boolean }) {
   );
 }
 
-function SearchIcon({ active }: { active: boolean }) {
+function ChatIcon({ active }: { active: boolean }) {
   return (
     <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.8} aria-hidden>
-      <circle cx="11" cy="11" r="7" />
-      <path strokeLinecap="round" d="M20 20l-3.5-3.5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8m-8 4h5m7-2a8 8 0 01-8 8H7l-4 3V12a8 8 0 018-8h2a8 8 0 018 8z" />
     </svg>
   );
 }
@@ -46,11 +45,11 @@ function UserIcon({ active }: { active: boolean }) {
   );
 }
 
-// DECISION: «Поиск» ведёт на якорь #search главной (фокус на поле поиска
-// без изменения логики фильтров), поэтому active для него всегда false.
+// DECISION: вместо дублирующего «Поиска» (поиск есть в шапке) — пункт «Чаты»:
+// иначе на мобильных до чатов вообще не добраться (иконка чата в шапке скрыта <sm).
 const items = [
   { href: '/', label: 'Главная', Icon: HomeIcon, exact: true, anchor: false },
-  { href: '/#search', label: 'Поиск', Icon: SearchIcon, exact: false, anchor: true },
+  { href: '/chat', label: 'Чаты', Icon: ChatIcon, exact: false, anchor: false },
   { href: '/listings/new', label: 'Разместить', Icon: null, exact: false, anchor: false },
   { href: '/favorites', label: 'Избранное', Icon: HeartIcon, exact: false, anchor: false },
   { href: '/cabinet', label: 'Профиль', Icon: UserIcon, exact: false, anchor: false },
