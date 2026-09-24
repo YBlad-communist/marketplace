@@ -82,6 +82,9 @@ export function Header() {
   const pathname = usePathname();
   const [q, setQ] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
+  // Пока /me не ответил — показываем скелетон места под навигацию, иначе шапка
+  // дёргается при переключении «Войти» ↔ иконки после каждой навигации.
+  const [authChecked, setAuthChecked] = useState(false);
 
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
@@ -111,6 +114,9 @@ export function Header() {
       })
       .catch(() => {
         if (!cancelled) setUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
       });
     return () => {
       cancelled = true;
@@ -228,8 +234,10 @@ export function Header() {
           + Разместить
         </Link>
 
-        <nav className="flex shrink-0 items-center gap-1" aria-label="Пользовательская навигация">
-          {user ? (
+        <nav className="flex min-w-[72px] shrink-0 items-center justify-end gap-1" aria-label="Пользовательская навигация">
+          {!authChecked ? (
+            <span className="skeleton hidden h-8 w-[72px] !rounded-lg sm:block" aria-hidden />
+          ) : user ? (
             <>
               <IconLink href="/favorites" label="Избранное" active={isActive('/favorites')}>
                 <HeartIcon />

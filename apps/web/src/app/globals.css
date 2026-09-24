@@ -13,6 +13,12 @@ body {
   @apply bg-background font-sans leading-body text-textPrimary antialiased;
 }
 
+/* Резервируем место под скроллбар всегда: иначе при переходе между страницей
+   со скроллом и без контент дёргается по горизонтали на ширину скроллбара. */
+html {
+  scrollbar-gutter: stable;
+}
+
 h1,
 h2,
 h3,
