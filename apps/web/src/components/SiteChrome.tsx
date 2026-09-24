@@ -16,8 +16,9 @@ export function SiteChrome() {
   return (
     <>
       {!isChat && <Footer />}
-      {/* DECISION: отступ вместо pb-обёртки layout, чтобы высота чата считалась точно */}
-      {!isOpenChat && <div className="h-20 md:hidden" aria-hidden />}
+      {/* DECISION: отступ вместо pb-обёртки layout, чтобы высота чата считалась точно.
+          Высота = --mobilenav-h, иначе под навигацией либо дырка, либо внешний скролл. */}
+      {!isOpenChat && <div className="h-16 md:hidden" aria-hidden />}
     </>
   );
 }

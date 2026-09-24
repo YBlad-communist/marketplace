@@ -129,7 +129,9 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-surface">
-      <div className="container-x flex items-center gap-2 py-3 md:gap-4">
+      {/* DECISION: фиксированная высота = --header-h (60px): чат-страницы считают
+          высоту от неё, любое расхождение даёт внешний скролл и «съезжание». */}
+      <div className="container-x flex h-[60px] items-center gap-2 md:gap-4">
         <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="РынокRU — на главную">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-xl font-bold text-white" aria-hidden>
             Р
