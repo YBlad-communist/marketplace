@@ -11,9 +11,15 @@ export const messagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-export const createConversationSchema = z.object({
-  listingId: z.string().cuid(),
-});
+export const createConversationSchema = z
+  .object({
+    // Чат по объявлению (классика) либо личный чат без объявления (с профиля).
+    listingId: z.string().cuid().optional(),
+    recipientId: z.string().cuid().optional(),
+  })
+  .refine((d) => d.listingId || d.recipientId, {
+    message: 'Укажите объявление или получателя',
+  });
 
 export const sendMessageSchema = z
   .object({

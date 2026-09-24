@@ -67,26 +67,21 @@ export default function UserProfilePage() {
   });
 
   const user = userQuery.data?.data.user;
-  const userListings = listingsQuery.data?.data.items ?? [];
 
-  // Чат всегда привязан к объявлению: пишем по самому свежему активному.
+  // Личный чат без привязки к объявлению — работает, даже если у пользователя
+  // нет активных объявлений.
   const startChat = async () => {
     if (!meId) {
       router.push('/login');
-      return;
-    }
-    const target = userListings[0];
-    if (!target) {
-      setChatError('У пользователя нет активных объявлений — написать пока некому');
       return;
     }
     setChatting(true);
     setChatError(null);
     try {
       const res = await post<{ data: { conversation: { id: string } } }>('/api/conversations', {
-        listingId: target.id,
+        recipientId: userId,
       });
-      router.push(`/chat?conv=${res.data.conversation.id}`);
+      router.push(`/chat/${res.data.conversation.id}`);
     } catch (err) {
       setChatError(err instanceof ApiError ? err.message : 'Не удалось начать чат');
     } finally {

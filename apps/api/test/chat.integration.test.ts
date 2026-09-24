@@ -117,6 +117,43 @@ describeInfra('chat (integration)', () => {
     expect(foreign.status).toBe(403);
   });
 
+  it('creates listing-less conversation by recipientId and chats', async () => {
+    const strangerPhone = `+7${Date.now().toString().slice(-9)}`;
+    await request(app)
+      .post('/api/auth/register')
+      .send({ name: 'Без объявлений', phone: strangerPhone, password, confirmPassword: password });
+    const stranger = await prisma.user.findUniqueOrThrow({ where: { phone: strangerPhone } });
+
+    const conv = await request(app)
+      .post('/api/conversations')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ recipientId: stranger.id });
+    expect(conv.status).toBe(201);
+    const conversationId = conv.body.data.conversation.id;
+
+    // Повторный запрос возвращает тот же чат (дедуп).
+    const conv2 = await request(app)
+      .post('/api/conversations')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ recipientId: stranger.id });
+    expect(conv2.status).toBe(201);
+    expect(conv2.body.data.conversation.id).toBe(conversationId);
+
+    const msg = await request(app)
+      .post(`/api/conversations/${conversationId}/messages`)
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ conversationId, text: 'Привет без объявления!' });
+    expect(msg.status).toBe(201);
+
+    // Себе писать нельзя.
+    const me = await prisma.user.findFirstOrThrow({ where: { phone } });
+    const self = await request(app)
+      .post('/api/conversations')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ recipientId: me.id });
+    expect(self.status).toBe(400);
+  });
+
   it('deletes conversation for both participants', async () => {
     const conv = await request(app)
       .post('/api/conversations')

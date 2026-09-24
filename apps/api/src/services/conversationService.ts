@@ -23,7 +23,39 @@ function presentMessage<T extends { deletedAt: Date | null; text: string; imageK
 const MSG_RATE_WINDOW = 10_000;
 const MSG_RATE_MAX = 10;
 
-export async function createConversation(input: { listingId: string; userId: string }) {
+export async function createConversation(input: { listingId?: string; recipientId?: string; userId: string }) {
+  // Личный чат без объявления (например, с профиля пользователя).
+  if (!input.listingId) {
+    if (!input.recipientId) {
+      throw new AppError(errorCodes.VALIDATION, 'Укажите объявление или получателя', 400);
+    }
+    if (input.recipientId === input.userId) {
+      throw new AppError(errorCodes.VALIDATION, 'Нельзя написать самому себе', 400);
+    }
+    const recipient = await prisma.user.findUnique({
+      where: { id: input.recipientId },
+      select: { id: true },
+    });
+    if (!recipient) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
+    const existing = await prisma.conversation.findFirst({
+      where: {
+        listingId: null,
+        participants: { some: { userId: input.userId } },
+        AND: [{ participants: { some: { userId: input.recipientId } } }],
+      },
+    });
+    if (existing) return existing;
+    return prisma.conversation.create({
+      data: {
+        listingId: null,
+        participants: {
+          create: [{ userId: input.userId }, { userId: input.recipientId }],
+        },
+      },
+      include: { participants: { include: { user: { select: { id: true, name: true } } } } },
+    });
+  }
+
   const listing = await prisma.listing.findUnique({ where: { id: input.listingId } });
   if (!listing) throw new AppError(errorCodes.NOT_FOUND, 'Объявление не найдено', 404);
   if (listing.sellerId === input.userId) {

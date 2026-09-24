@@ -37,6 +37,7 @@ router.post('/', authenticate, validate(createConversationSchema), async (req, r
   try {
     const conversation = await createConversation({
       listingId: req.body.listingId,
+      recipientId: req.body.recipientId,
       userId: req.userId!,
     });
     res.status(201).json({ data: { conversation } });

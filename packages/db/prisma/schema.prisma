@@ -182,8 +182,8 @@ model ListingImage {
 
 model Conversation {
   id           String   @id @default(cuid())
-  listingId    String
-  listing      Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  listingId    String?
+  listing      Listing?  @relation(fields: [listingId], references: [id], onDelete: Cascade)
   participants ConversationParticipant[]
   messages     Message[]
   createdAt    DateTime @default(now())

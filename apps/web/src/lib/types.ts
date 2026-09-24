@@ -72,7 +72,8 @@ export interface CursorPage<T> {
 
 export interface ConversationDto {
   id: string;
-  listing: { id: string; title: string; price: number; images: ListingImageDto[] };
+  // Личные чаты без объявления: listing === null.
+  listing: { id: string; title: string; price: number; images: ListingImageDto[] } | null;
   participants: Array<{ id: string; name: string; avatarUrl: string | null }>;
   lastMessage: MessageDto | null;
   unreadCount: number;
