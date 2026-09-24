@@ -20,7 +20,10 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === 'true'),
-  COOKIE_DOMAIN: z.string().default('localhost'),
+  // Пусто = host-only кука (без Domain): работает на любом хосте —
+  // localhost, 127.0.0.1, LAN-IP. Domain=localhost ломал refresh везде,
+  // кроме буквального localhost (кука туда просто не отправляется).
+  COOKIE_DOMAIN: z.string().optional().default(''),
 
   CORS_ORIGINS: z
     .string()
