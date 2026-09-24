@@ -56,7 +56,7 @@ export function MessageBubble({
     <div
       onContextMenu={(e) => onContextMenu(e, m)}
       className={cn(
-        'max-w-[75%] break-words px-3 py-1.5 text-sm leading-relaxed shadow-card md:max-w-[60%]',
+        'w-fit max-w-[75%] break-words px-3 py-1.5 text-sm leading-relaxed shadow-card md:max-w-[60%]',
         'rounded-2xl',
         mine ? 'ml-auto rounded-br-md bg-accentSoft text-textPrimary' : 'rounded-bl-md bg-surface text-textPrimary',
         !groupEnd && (mine ? '!rounded-br-2xl' : '!rounded-bl-2xl'),
