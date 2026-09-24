@@ -2,6 +2,10 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { get } from '@/lib/api';
+import { useAuthStore } from '@/lib/auth-store';
+import { ConversationDto } from '@/lib/types';
 import { cn } from '@/lib/format';
 
 function HomeIcon({ active }: { active: boolean }) {
@@ -57,6 +61,17 @@ const items = [
 
 export function MobileNav() {
   const pathname = usePathname();
+  const user = useAuthStore((s) => s.user);
+  const conversationsQuery = useQuery({
+    queryKey: ['conversations'],
+    queryFn: () => get<{ data: { items: ConversationDto[] } }>('/api/conversations'),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+  });
+  const totalUnread = (conversationsQuery.data?.data.items ?? []).reduce(
+    (sum, c) => sum + (c.unreadCount ?? 0),
+    0
+  );
   // DECISION: в открытом чате навигация скрыта — чат занимает весь экран.
   if (pathname.startsWith('/chat/')) return null;
   return (
@@ -64,18 +79,24 @@ export function MobileNav() {
       <div className="grid grid-cols-5">
         {items.map(({ href, label, Icon, exact, anchor }) => {
           const active = !anchor && (exact ? pathname === href : pathname.startsWith(href));
+          const badge = href === '/chat' ? totalUnread : 0;
           return (
             <Link
               key={label}
               href={href}
-              aria-label={label}
+              aria-label={badge > 0 ? `${label}, непрочитанных: ${badge}` : label}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'flex flex-col items-center gap-0.5 py-2 text-[11px] leading-tight',
+                'relative flex flex-col items-center gap-0.5 py-2 text-[11px] leading-tight',
                 active ? 'font-semibold text-accent' : 'text-textSecondary'
               )}
             >
               {Icon ? <Icon active={active} /> : <PlusIcon />}
+              {badge > 0 && (
+                <span className="absolute right-4 top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              )}
               <span>{label}</span>
             </Link>
           );

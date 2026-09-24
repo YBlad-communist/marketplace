@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/lib/auth-store';
 import { get, post, setAccessToken } from '@/lib/api';
 import { disconnectSocket } from '@/lib/socket';
-import { CategoryDto } from '@/lib/types';
+import { CategoryDto, ConversationDto } from '@/lib/types';
 import { cn } from '@/lib/format';
 
 function SearchIcon() {
@@ -52,18 +52,25 @@ function CatalogIcon() {
   );
 }
 
-function IconLink({ href, label, active, children }: { href: string; label: string; active: boolean; children: React.ReactNode }) {
+function IconLink({ href, label, active, badge, children }: { href: string; label: string; active: boolean; badge?: number; children: React.ReactNode }) {
   return (
     <Link
       href={href}
-      aria-label={label}
+      aria-label={badge ? `${label}, непрочитанных: ${badge}` : label}
       aria-current={active ? 'page' : undefined}
       className={cn(
         'hidden flex-col items-center gap-0.5 rounded-lg px-2 py-1 text-[11px] leading-tight transition-colors sm:flex',
         active ? 'font-semibold text-accent' : 'text-textSecondary hover:text-textPrimary'
       )}
     >
-      {children}
+      <span className="relative">
+        {children}
+        {badge != null && badge > 0 && (
+          <span className="absolute -right-2 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+      </span>
       <span>{label}</span>
     </Link>
   );
@@ -81,6 +88,18 @@ export function Header() {
     queryFn: () => get<{ data: { categories: CategoryDto[] } }>('/api/categories'),
     staleTime: 5 * 60_000,
   });
+
+  // Суммарный счётчик непрочитанных для бейджа на иконке чатов (кэш общий со списком чатов).
+  const conversationsQuery = useQuery({
+    queryKey: ['conversations'],
+    queryFn: () => get<{ data: { items: ConversationDto[] } }>('/api/conversations'),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+  });
+  const totalUnread = (conversationsQuery.data?.data.items ?? []).reduce(
+    (sum, c) => sum + (c.unreadCount ?? 0),
+    0
+  );
 
   useEffect(() => {
     // Не дёргаем /me для гостей на каждой странице: если пользователя нет в сторе —
@@ -215,7 +234,7 @@ export function Header() {
               <IconLink href="/favorites" label="Избранное" active={isActive('/favorites')}>
                 <HeartIcon />
               </IconLink>
-              <IconLink href="/chat" label="Чаты" active={isActive('/chat')}>
+              <IconLink href="/chat" label="Чаты" active={isActive('/chat')} badge={totalUnread}>
                 <ChatIcon />
               </IconLink>
               <IconLink href="/cabinet" label="Профиль" active={isActive('/cabinet') || isActive('/orders')}>
