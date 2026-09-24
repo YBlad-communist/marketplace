@@ -20,6 +20,10 @@ export interface CurrentUser {
 interface AuthState {
   user: CurrentUser | null;
   setUser: (user: CurrentUser | null) => void;
+  // Проверяли ли текущую сессию через /me (один раз на загрузку приложения,
+  // а не на каждую страницу — иначе шапка дёргается при каждой навигации).
+  checked: boolean;
+  setChecked: (v: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -27,7 +31,9 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       user: null,
       setUser: (user) => set({ user }),
+      checked: false,
+      setChecked: (checked) => set({ checked }),
     }),
-    { name: 'marketplace-auth' }
+    { name: 'marketplace-auth', partialize: (s) => ({ user: s.user }) as AuthState }
   )
 );

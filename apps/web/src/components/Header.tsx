@@ -78,13 +78,14 @@ function IconLink({ href, label, active, badge, children }: { href: string; labe
 
 export function Header() {
   const { user, setUser } = useAuthStore();
+  const checked = useAuthStore((s) => s.checked);
   const router = useRouter();
   const pathname = usePathname();
   const [q, setQ] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
   // Пока /me не ответил — показываем скелетон места под навигацию, иначе шапка
   // дёргается при переключении «Войти» ↔ иконки после каждой навигации.
-  const [authChecked, setAuthChecked] = useState(false);
+  const authChecked = checked;
 
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
@@ -103,25 +104,6 @@ export function Header() {
     (sum, c) => sum + (c.unreadCount ?? 0),
     0
   );
-
-  useEffect(() => {
-    // Не дёргаем /me для гостей на каждой странице: если пользователя нет в сторе —
-    // пробуем тихую сессию один раз (refresh cookie), иначе остаёмся гостем.
-    let cancelled = false;
-    get<{ data: { user: Parameters<typeof setUser>[0] } }>('/api/users/me')
-      .then((r) => {
-        if (!cancelled) setUser(r.data.user);
-      })
-      .catch(() => {
-        if (!cancelled) setUser(null);
-      })
-      .finally(() => {
-        if (!cancelled) setAuthChecked(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [setUser]);
 
   useEffect(() => {
     if (!catalogOpen) return;

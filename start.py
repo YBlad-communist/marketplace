@@ -10,6 +10,10 @@
 Опции:
     python start.py --no-migrate   пропустить prisma migrate deploy
     python start.py --check        только проверить окружение, ничего не запускать
+    python start.py --prod         production-режим: pnpm build + запуск собранного
+                                   кода (страницы открываются СРАЗУ, без компиляции
+                                   на первом заходе как в dev). Если сменился LAN-IP,
+                                   просто запустите --prod ещё раз (пересоберёт web).
 """
 
 import os
@@ -180,15 +184,36 @@ def main(argv):
     else:
         log("миграции пропущены (--no-migrate)")
 
+    prod = "--prod" in argv
+    if prod:
+        # .env задаёт NODE_ENV=development для dev-запуска; сборке и prod-запуску
+        # нужен production, иначе next build пререндерит в dev-режиме и падает.
+        env["NODE_ENV"] = "production"
+        log("собираю production (pnpm build, займёт несколько минут)...")
+        r = run_cmd(["pnpm", "build"], env)
+        if r.returncode != 0:
+            die("pnpm build завершился с кодом %d" % r.returncode)
+        log("сборка готова")
+        dev_cmd = (
+            "pnpm exec concurrently -n api,web,worker -c magenta,cyan,yellow "
+            "\"pnpm --filter @marketplace/api start\" "
+            "\"pnpm --filter @marketplace/web start\" "
+            "\"pnpm --filter @marketplace/worker start\""
+        )
+    else:
+        dev_cmd = None
+
     print("", flush=True)
     print("  РынокRU запускается:", flush=True)
     print("    сайт          %s" % WEB_URL, flush=True)
     print("    API           %s" % API_URL, flush=True)
     print("    MinIO консоль %s" % MINIO_CONSOLE, flush=True)
     print("  Остановка — Ctrl+C", flush=True)
+    if prod:
+        print("  Режим: PRODUCTION (собранный код, быстрые переходы)", flush=True)
     print("", flush=True)
     try:
-        r = run_cmd(["pnpm", "dev"], env)
+        r = run_cmd(["pnpm", "dev"] if dev_cmd is None else [dev_cmd], env)
         sys.exit(r.returncode)
     except KeyboardInterrupt:
         print("", flush=True)
