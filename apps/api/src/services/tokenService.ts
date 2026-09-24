@@ -99,14 +99,20 @@ export async function createRefreshToken(
 
 /**
  * Ротация refresh-токена. Возвращает новый токен.
- * При повторном использовании старого токена отзывает всю семью.
+ * При повторном использовании старого токена отзывает всю семью —
+ * КРОМЕ конкурентного повтора в grace-окно (две вкладки обновились
+ * одновременно): тогда прокручиваем семью ещё на шаг вперёд и отдаём
+ * свежий токен, а не выкидываем пользователя. Без этого любая пара
+ * параллельных /refresh разлогинивала аккаунт на всех устройствах.
  */
+const ROTATION_GRACE_MS = 30_000;
+
 export async function rotateRefreshToken(
   oldToken: string,
   ctx: { userAgent?: string; ip?: string }
 ): Promise<{ token: string; familyId: string; expiresAt: Date; user: { id: string; role: string } }> {
   const hashed = hashToken(oldToken);
-  const record = await prisma.refreshTokenFamily.findUnique({
+  let record = await prisma.refreshTokenFamily.findUnique({
     where: { tokenHash: hashed },
   });
 
@@ -114,14 +120,29 @@ export async function rotateRefreshToken(
     throw new AppError(errorCodes.UNAUTHORIZED, 'Refresh-токен недействителен', 401);
   }
   if (record.revokedAt) {
-    // Повторное использование уже отозванного токена — детект компрометации.
-    await revokeFamily(record.familyId);
-    await prisma.refreshTokenFamily.updateMany({
-      where: { familyId: record.familyId },
-      data: { revokedAt: new Date() },
-    });
-    logSecurityEvent('refresh_token_reuse_detected', { familyId: record.familyId });
-    throw new AppError(errorCodes.UNAUTHORIZED, 'Сессия отозвана, войдите снова', 401);
+    // Токен уже ротирован: возможно, это вторая вкладка с тем же токеном.
+    // Если семья не отозвана целиком и ротация была только что — продолжаем
+    // семью от её живого токена вместо отзыва всего.
+    const familyRevoked = await isFamilyRevoked(record.familyId);
+    if (!familyRevoked && record.revokedAt.getTime() > Date.now() - ROTATION_GRACE_MS) {
+      const live = await prisma.refreshTokenFamily.findFirst({
+        where: { familyId: record.familyId, revokedAt: null, expiresAt: { gte: new Date() } },
+      });
+      if (live) {
+        record = live;
+      } else {
+        throw new AppError(errorCodes.UNAUTHORIZED, 'Сессия отозвана, войдите снова', 401);
+      }
+    } else {
+      // Повторное использование давно отозванного токена — детект компрометации.
+      await revokeFamily(record.familyId);
+      await prisma.refreshTokenFamily.updateMany({
+        where: { familyId: record.familyId },
+        data: { revokedAt: new Date() },
+      });
+      logSecurityEvent('refresh_token_reuse_detected', { familyId: record.familyId });
+      throw new AppError(errorCodes.UNAUTHORIZED, 'Сессия отозвана, войдите снова', 401);
+    }
   }
   if (await isFamilyRevoked(record.familyId)) {
     throw new AppError(errorCodes.UNAUTHORIZED, 'Сессия отозвана, войдите снова', 401);

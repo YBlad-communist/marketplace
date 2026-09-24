@@ -114,4 +114,22 @@ describeInfra('sessions (integration): экран активных сессий'
     const res = await request(app).get('/api/auth/sessions');
     expect(res.status).toBe(401);
   });
+
+  it('конкурентный refresh одним токеном (две вкладки) не убивает семью', async () => {
+    const refresh = () =>
+      request(app).post('/api/auth/refresh').set('Cookie', cookieB);
+    const [r1, r2] = await Promise.all([refresh(), refresh()]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(r1.body.data.accessToken).toBeTruthy();
+    expect(r2.body.data.accessToken).toBeTruthy();
+
+    // Семья жива: оба новых токена валидны, список сессий доступен.
+    for (const r of [r1, r2]) {
+      const me = await request(app)
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${r.body.data.accessToken}`);
+      expect(me.status).toBe(200);
+    }
+  });
 });
