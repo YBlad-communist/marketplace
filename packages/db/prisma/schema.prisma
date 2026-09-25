@@ -246,8 +246,8 @@ model Review {
   author     User     @relation("author", fields: [authorId], references: [id])
   revieweeId String
   reviewee   User     @relation("reviewee", fields: [revieweeId], references: [id])
-  orderId    String?
-  order      Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   rating     Int
   text       String?
   createdAt  DateTime @default(now())

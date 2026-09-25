@@ -11,40 +11,6 @@ router.post('/', authenticate, validate(reviewCreateSchema), async (req, res, ne
   try {
     const { revieweeId, orderId, rating, text } = req.body;
 
-    // Свободный отзыв с профиля продавца (без сделки): дедуп — один отзыв
-    // без orderId на пару (author, reviewee), т.к. NULL-уникальность в PG не работает.
-    if (!orderId) {
-      if (revieweeId === req.userId) {
-        throw new AppError(errorCodes.VALIDATION, 'Нельзя оставить отзыв самому себе', 400);
-      }
-      const reviewee = await prisma.user.findUnique({ where: { id: revieweeId }, select: { id: true } });
-      if (!reviewee) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
-      const existing = await prisma.review.findFirst({
-        where: { authorId: req.userId!, revieweeId, orderId: null },
-        select: { id: true },
-      });
-      if (existing) {
-        throw new AppError(errorCodes.CONFLICT, 'Вы уже оставили отзыв этому пользователю', 409);
-      }
-      const review = await prisma.$transaction(async (tx) => {
-        const created = await tx.review.create({
-          data: { authorId: req.userId!, revieweeId, orderId: null, rating, text },
-        });
-        const agg = await tx.review.aggregate({
-          where: { revieweeId },
-          _avg: { rating: true },
-          _count: true,
-        });
-        await tx.user.update({
-          where: { id: revieweeId },
-          data: { rating: agg._avg.rating ?? 0, ratingCount: agg._count },
-        });
-        return created;
-      });
-      res.status(201).json({ data: { review } });
-      return;
-    }
-
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { listing: { select: { sellerId: true } } },

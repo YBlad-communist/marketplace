@@ -12,10 +12,9 @@ export const sellerYookassaConnectSchema = z.object({
 
 export const reviewCreateSchema = z.object({
   revieweeId: z.string().cuid(),
-  // orderId опционален: отзыв можно оставить с профиля продавца без сделки
-  // (свободный отзыв). Отзыв по сделке — с orderId, revieweeId обязан совпадать
+  // Отзыв возможен только по завершённой сделке: revieweeId обязан совпадать
   // с контрагентом из заказа (проверяется в хендлере), иначе это накрутка.
-  orderId: z.string().cuid().optional(),
+  orderId: z.string().cuid(),
   rating: z.number().int().min(1).max(5),
   text: z.string().trim().min(1).max(2000).optional(),
 });
