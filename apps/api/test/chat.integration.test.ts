@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { prisma } from '@marketplace/db';
@@ -176,6 +176,80 @@ describeInfra('chat (integration)', () => {
         .get(`/api/conversations/${conversationId}/messages`)
         .set('Authorization', `Bearer ${token}`);
       expect(history.status).toBe(404);
+    }
+  });
+
+  it('unread counts: один groupBy вместо N count (нет N+1)', async () => {
+    const countSpy = vi.spyOn(prisma.message, 'count');
+    const base = Date.now().toString().slice(-8);
+    const marker = `n1-${base}`;
+    const tokens: string[] = [];
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const p = `+79${base}${i}`;
+      await request(app)
+        .post('/api/auth/register')
+        .send({ name: `Собеседник ${i}`, phone: p, password, confirmPassword: password });
+      const login = await request(app).post('/api/auth/login').send({ phone: p, password });
+      expect(login.status).toBe(200);
+      tokens.push(login.body.data.accessToken as string);
+      ids.push((await prisma.user.findUniqueOrThrow({ where: { phone: p } })).id);
+    }
+    for (let i = 0; i < tokens.length; i++) {
+      const conv = await request(app)
+        .post('/api/conversations')
+        .set('Authorization', `Bearer ${buyerToken}`)
+        .send({ recipientId: ids[i] });
+      expect(conv.status).toBe(201);
+      const conversationId = conv.body.data.conversation.id as string;
+      const msg = await request(app)
+        .post(`/api/conversations/${conversationId}/messages`)
+        .set('Authorization', `Bearer ${tokens[i]}`)
+        .send({ conversationId, text: `${marker}-${i}` });
+      expect(msg.status).toBe(201);
+    }
+
+    const list = await request(app)
+      .get('/api/conversations?limit=50')
+      .set('Authorization', `Bearer ${buyerToken}`);
+    expect(list.status).toBe(200);
+    const mine = (list.body.data.items as Array<{ lastMessage: { text: string } | null; unreadCount: number }>)
+      .filter((c) => c.lastMessage?.text?.startsWith(marker));
+    expect(mine).toHaveLength(5);
+    for (const c of mine) expect(c.unreadCount).toBe(1);
+    // Ни одного поштучного COUNT — только сгруппированный запрос.
+    expect(countSpy).not.toHaveBeenCalled();
+    countSpy.mockRestore();
+  });
+
+  it('rate limit: массовое создание диалогов режется 429', async () => {
+    // Глобальный setup гасит RATE_LIMIT_ENABLED — поднимаем свежий app
+    // с включённым лимитером (динамический реимпорт после stubEnv).
+    vi.stubEnv('RATE_LIMIT_ENABLED', 'true');
+    vi.resetModules();
+    try {
+      const { createApp: freshCreateApp } = await import('../src/app.js');
+      const { disconnectRedis: freshDisconnect } = await import('../src/lib/redis.js');
+      const { prisma: freshPrisma } = await import('@marketplace/db');
+      try {
+        const freshApp = freshCreateApp();
+        const statuses: number[] = [];
+        // Лимит 10/мин с IP на fixed window: 15 подряд дают 429 хотя бы
+        // в одном из (максимум двух) затронутых окон.
+        for (let i = 0; i < 15; i++) {
+          const res = await request(freshApp)
+            .post('/api/conversations')
+            .set('Authorization', `Bearer ${buyerToken}`)
+            .send({ listingId });
+          statuses.push(res.status);
+        }
+        expect(statuses.filter((s) => s === 429).length).toBeGreaterThan(0);
+      } finally {
+        await freshDisconnect().catch(() => undefined);
+        await freshPrisma.$disconnect().catch(() => undefined);
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });

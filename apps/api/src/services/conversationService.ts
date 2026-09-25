@@ -123,33 +123,56 @@ export async function listConversations(userId: string, cursor?: string, limit =
   });
   const lastRead = new Map(unread.map((u) => [u.conversationId, u.lastReadAt?.getTime() ?? 0]));
 
-  const items = await Promise.all(
-    page.map(async (c) => {
+  // Один сгруппированный запрос на все диалоги страницы вместо N отдельных
+  // COUNT — раньше список с M непрочитанными чатами делал 1 + M запросов.
+  const lastReadMap = new Map(
+    page.map((c) => {
       const lastMessage = c.messages[0] ? presentMessage(c.messages[0]) : null;
       const lastReadAt = lastRead.get(c.id) ?? 0;
-      const unreadCount =
-        lastMessage && new Date(lastMessage.createdAt).getTime() > lastReadAt
-          ? await awaitUnreadCount(c.id, lastReadAt)
-          : 0;
-      return {
-        id: c.id,
-        listing: c.listing,
-        participants: c.participants.map((p) => p.user),
-        lastMessage,
-        unreadCount,
-        createdAt: c.createdAt,
-        updatedAt: c.updatedAt,
-      };
+      const needsCount =
+        !!lastMessage && new Date(lastMessage.createdAt).getTime() > lastReadAt;
+      return [c.id, needsCount ? lastReadAt : -1] as const;
     })
   );
+  const unreadMap = await unreadCountsByConversation(
+    page.map((c) => c.id),
+    lastReadMap
+  );
+
+  const items = page.map((c) => {
+    const lastMessage = c.messages[0] ? presentMessage(c.messages[0]) : null;
+    return {
+      id: c.id,
+      listing: c.listing,
+      participants: c.participants.map((p) => p.user),
+      lastMessage,
+      unreadCount: unreadMap.get(c.id) ?? 0,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    };
+  });
   const nextCursor = hasMore ? page[page.length - 1].id : null;
   return { items, nextCursor, total: await prisma.conversation.count({ where: { participants: { some: { userId } } } }) };
 }
 
-async function awaitUnreadCount(conversationId: string, lastReadAt: number): Promise<number> {
-  return prisma.message.count({
-    where: { conversationId, createdAt: { gt: new Date(lastReadAt) } },
+async function unreadCountsByConversation(
+  conversationIds: string[],
+  lastReadMap: Map<string, number>
+): Promise<Map<string, number>> {
+  const wanted = conversationIds.filter((id) => (lastReadMap.get(id) ?? -1) >= 0);
+  if (wanted.length === 0) return new Map();
+  const rows = await prisma.message.groupBy({
+    by: ['conversationId'],
+    where: {
+      conversationId: { in: wanted },
+      OR: wanted.map((id) => ({
+        conversationId: id,
+        createdAt: { gt: new Date(lastReadMap.get(id) ?? 0) },
+      })),
+    },
+    _count: true,
   });
+  return new Map(rows.map((r) => [r.conversationId, r._count]));
 }
 
 export async function getMessages(conversationId: string, userId: string, cursor?: string, limit = 50) {

@@ -9,6 +9,7 @@ import {
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
+import { ipRateLimit } from '../middleware/rateLimit.js';
 import { getIO } from '../lib/socket.js';
 import { enqueueS3Delete } from '../services/notificationService.js';
 import {
@@ -33,18 +34,26 @@ router.get('/', authenticate, validate(conversationListSchema, 'query'), async (
   }
 });
 
-router.post('/', authenticate, validate(createConversationSchema), async (req, res, next) => {
-  try {
-    const conversation = await createConversation({
-      listingId: req.body.listingId,
-      recipientId: req.body.recipientId,
-      userId: req.userId!,
-    });
-    res.status(201).json({ data: { conversation } });
-  } catch (err) {
-    next(err);
+router.post(
+  '/',
+  authenticate,
+  // Не дать заскриптовать массовое создание диалогов (спам/харассмент):
+  // не больше 10 новых диалогов в минуту с одного IP.
+  ipRateLimit('conversations:create', 60_000, 10),
+  validate(createConversationSchema),
+  async (req, res, next) => {
+    try {
+      const conversation = await createConversation({
+        listingId: req.body.listingId,
+        recipientId: req.body.recipientId,
+        userId: req.userId!,
+      });
+      res.status(201).json({ data: { conversation } });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 router.get('/:id/messages', authenticate, validate(messagesQuerySchema, 'query'), async (req, res, next) => {
   try {
