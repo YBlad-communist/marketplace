@@ -38,6 +38,7 @@ export const MAINTENANCE_JOBS = {
   CHECK_EXPIRED_HOLDS: 'check-expired-holds',
   RECOVER_RELEASING: 'recover-stuck-releasing',
   SEND_OFFLINE_DIGEST: 'send-offline-digest',
+  CLEANUP_ORPHANED_UPLOADS: 'cleanup-orphaned-uploads',
 } as const;
 
 export const S3_JOBS = {

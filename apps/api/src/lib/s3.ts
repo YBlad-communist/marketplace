@@ -31,10 +31,11 @@ export interface PresignedUpload {
 }
 
 function randomKey(extension: string): string {
-  const now = new Date();
-  const date = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
   const id = cryptoRandom();
-  return `listings/${date}/${id}${extension}`;
+  // Сырые загрузки живут отдельно под raw/: подтверждённые файлы после
+  // processImage получают другой ключ без префикса, а брошенные raw-объекты
+  // старше grace-периода сносит фоновая джоба cleanup-orphaned-uploads.
+  return `raw/${id}${extension}`;
 }
 
 function cryptoRandom(): string {
@@ -101,7 +102,7 @@ export async function deleteObject(key: string): Promise<void> {
 const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 function checkKeySafe(key: string): void {
-  if (!key.startsWith('listings/') || key.includes('..')) {
+  if ((!key.startsWith('listings/') && !key.startsWith('raw/')) || key.includes('..')) {
     throw new AppError(errorCodes.VALIDATION, 'Некорректный ключ объекта', 400);
   }
 }

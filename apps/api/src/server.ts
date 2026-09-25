@@ -6,7 +6,7 @@ import { connectRedis, disconnectRedis } from './lib/redis.js';
 import { initSocket } from './lib/socket.js';
 import { logger } from './lib/logger.js';
 import { closeQueues } from './queues/index.js';
-import { enqueueTokenCleanup, enqueueExpiredHoldsCheck, enqueueReleasingRecovery } from './services/notificationService.js';
+import { enqueueTokenCleanup, enqueueExpiredHoldsCheck, enqueueReleasingRecovery, enqueueOrphanedUploadsCleanup } from './services/notificationService.js';
 import { scheduleCriticalJob } from './services/jobScheduler.js';
 
 async function main() {
@@ -28,6 +28,7 @@ async function main() {
   await scheduleCriticalJob('enqueueTokenCleanup', () => enqueueTokenCleanup());
   await scheduleCriticalJob('enqueueExpiredHoldsCheck', () => enqueueExpiredHoldsCheck());
   await scheduleCriticalJob('enqueueReleasingRecovery', () => enqueueReleasingRecovery());
+  await scheduleCriticalJob('enqueueOrphanedUploadsCleanup', () => enqueueOrphanedUploadsCleanup());
 
   const shutdown = async (signal: string) => {
     logger.info(`received ${signal}, shutting down`);

@@ -68,6 +68,15 @@ export async function enqueueReleasingRecovery(): Promise<void> {
   });
 }
 
+export async function enqueueOrphanedUploadsCleanup(): Promise<void> {
+  await getQueue(QUEUES.MAINTENANCE).add(MAINTENANCE_JOBS.CLEANUP_ORPHANED_UPLOADS, {}, {
+    repeat: { every: 6 * 3600_000 },
+    jobId: 'orphaned-uploads-cleanup-repeat',
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 60_000 },
+  });
+}
+
 /**
  * Удаление объектов из S3 в фоне: ретраи BullMQ есть из коробки, поэтому
  * удаление переживает временные падения S3/MinIO, а ответ API не зависит от

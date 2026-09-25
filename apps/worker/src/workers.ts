@@ -21,6 +21,7 @@ import { processImageJob } from './imageJob.js';
 import { moderateListingJob } from './moderationJob.js';
 import { savedSearchNotificationJob } from './notificationJob.js';
 import { deleteObjectsJob } from './s3Delete.js';
+import { cleanupOrphanedUploads } from './orphanedUploadsCleanup.js';
 
 function connection() {
   return { url: env.REDIS_URL };
@@ -134,6 +135,9 @@ export function createWorkers(): Worker[] {
         } else if (job.name === MAINTENANCE_JOBS.SEND_OFFLINE_DIGEST) {
           const result = await sendOfflineDigest(job.data as { receiverId?: unknown; conversationId?: unknown });
           logger.info({ jobName: job.name, ...result }, 'offline digest sent');
+        } else if (job.name === MAINTENANCE_JOBS.CLEANUP_ORPHANED_UPLOADS) {
+          const result = await cleanupOrphanedUploads();
+          logger.info({ jobName: job.name, ...result }, 'orphaned uploads cleaned');
         } else {
           throw new Error(`unknown maintenance job: ${job.name}`);
         }
