@@ -89,7 +89,43 @@ pnpm typecheck              # tsc во всех пакетах
 pnpm test                   # vitest по всем пакетам; интеграционные идут при доступных БД/Redis (ЮKassa мокается через fetch)
 pnpm --filter @marketplace/web test:e2e  # playwright (нужен запущенный web)
 pnpm build                  # сборка всех пакетов (shared → db → api → web → worker)
+python start.py             # полный локальный запуск (Redis, MinIO, миграции, web+api+worker)
+python start.py --prod      # то же, но собранный код (быстрые переходы без dev-компиляции)
+python infra/backup_db.py   # ручной бэкап БД в отдельное S3-хранилище
 ```
+
+## Резервные копии БД
+
+Бэкап лежит в **отдельном** бакете (`BACKUP_S3_BUCKET`, не там же, где фото) — копия рядом с базой не считается. Переменные — в `.env.example`, раздел «Резервное копирование БД».
+
+- Скрипт: `python infra/backup_db.py` (Windows) / `infra/backup-db.sh` (Linux VPS).
+  `pg_dump` в custom-формате → `s3://<BACKUP_S3_BUCKET>/postgres/<TIMESTAMP>.dump`
+  (по воскресеньям — дубль в `postgres/weekly/`).
+- Retention в самом скрипте: дневные старше 14 дней — удалить, недельные старше 90 — удалить.
+- При падении — POST в `BACKUP_ALERT_WEBHOOK` (напр. Telegram Bot API).
+
+### Расписание (вне приложения — бэкап должен работать, даже если API упало)
+
+Windows (Планировщик заданий, ежедневно 3:00):
+```
+python C:\path\to\marketplace\infra\backup_db.py >> C:\logs\marketplace-backup.log 2>&1
+```
+
+Linux VPS (cron):
+```bash
+0 3 * * * cd /path/to/marketplace && ./infra/backup-db.sh >> /var/log/marketplace-backup.log 2>&1
+```
+
+### Восстановление БД из бэкапа
+
+1. Скачать нужный дамп:
+   `aws s3 cp s3://<BACKUP_S3_BUCKET>/postgres/<TIMESTAMP>.dump ./restore.dump --endpoint-url <BACKUP_S3_ENDPOINT>`
+2. Поднять чистую базу: `createdb -h <host> -U marketplace marketplace_restored`
+3. Восстановить: `pg_restore --dbname="postgresql://marketplace:<пароль>@<host>/marketplace_restored" --no-owner --clean ./restore.dump`
+4. Сверить counts (`User`/`Listing`/`Order`/`Message`/`Review`) с ожидаемыми на момент бэкапа
+5. Переключить `DATABASE_URL` приложения на восстановленную базу, перезапустить API/worker
+
+Восстановление проверено вручную 2026-09-26: дамп из `marketplace-backups` накатан в `marketplace_restored`, counts сошлись 1-в-1 (26/17/0/36/0).
 
 ## Структура
 
