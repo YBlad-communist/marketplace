@@ -1,4 +1,5 @@
 FROM node:20-alpine AS base
+RUN apk add --no-cache openssl
 RUN corepack enable && corepack prepare pnpm@9 --activate
 WORKDIR /app
 COPY .npmrc .npmrc
@@ -16,9 +17,9 @@ COPY . .
 RUN pnpm --filter @marketplace/shared build
 RUN pnpm --filter @marketplace/db build
 RUN pnpm --filter @marketplace/api build
-RUN pnpm --filter @marketplace/api --prod deploy /prod/api --legacy || true
 
 FROM node:20-alpine AS runtime
+RUN apk add --no-cache openssl
 ENV NODE_ENV=production
 WORKDIR /app/apps/api
 COPY --from=build /app/apps/api/dist ./dist
