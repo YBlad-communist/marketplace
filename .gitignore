@@ -11,10 +11,9 @@ out/
 coverage/
 
 # env / secrets
-.env
+# .env умышленно НЕ игнорируется — коммитим для деплоя
 .env.local
 .env.*.local
-!.env.example
 
 # logs
 *.log
@@ -41,6 +40,6 @@ packages/db/prisma/migrations/dev/
 .tsbuildinfo
 *.tsbuildinfo
 
-# local infra dumps / committed env duplicates
+# local infra dumps
 dump.rdb
 apps/worker/.env
