@@ -2,9 +2,10 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
 import { ListingCard } from '@/components/ListingCard';
+import { ReviewForm } from '@/components/ReviewForm';
 import { get, post, ApiError } from '@/lib/api';
 import { useAuthStore } from '@/lib/auth-store';
 import { CursorPage, ListingDto } from '@/lib/types';
@@ -44,7 +45,9 @@ export default function UserProfilePage() {
   const params = useParams<{ id: string }>();
   const userId = params.id;
   const router = useRouter();
+  const queryClient = useQueryClient();
   const meId = useAuthStore((s) => s.user?.id);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatting, setChatting] = useState(false);
 
@@ -122,12 +125,30 @@ export default function UserProfilePage() {
                     <button type="button" className="btn-primary text-xs" disabled={chatting} onClick={startChat}>
                       {chatting ? 'Открываем чат…' : 'Написать'}
                     </button>
+                    {!reviewOpen && (
+                      <button type="button" className="btn-secondary text-xs" onClick={() => setReviewOpen(true)}>
+                        Оставить отзыв
+                      </button>
+                    )}
                   </div>
                 )}
                 {chatError && (
                   <p className="mt-2 text-sm text-danger" role="alert">
                     {chatError}
                   </p>
+                )}
+                {meId && meId !== userId && reviewOpen && (
+                  <div className="mt-3">
+                    <ReviewForm
+                      revieweeId={userId}
+                      onCancel={() => setReviewOpen(false)}
+                      onDone={() => {
+                        setReviewOpen(false);
+                        void queryClient.invalidateQueries({ queryKey: ['user-reviews', userId] });
+                        void queryClient.invalidateQueries({ queryKey: ['user', userId] });
+                      }}
+                    />
+                  </div>
                 )}
               </div>
             </div>

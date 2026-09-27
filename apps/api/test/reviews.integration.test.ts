@@ -153,11 +153,26 @@ describeInfra('reviews (integration): целостность рейтинга', 
     expect(pairReviews).toBeGreaterThanOrEqual(1);
   });
 
-  it('отклоняет отзыв без orderId -> 400 (только по сделке)', async () => {
+  it('свободный отзыв с профиля (без orderId) -> 201, повторный -> 409', async () => {
+    const first = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ revieweeId: sellerId, rating: 5, text: 'Хороший продавец' });
+    expect(first.status).toBe(201);
+    expect(first.body.data.review.orderId).toBeNull();
+
+    const dup = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ revieweeId: sellerId, rating: 4, text: 'Второй отзыв без сделки' });
+    expect(dup.status).toBe(409);
+  });
+
+  it('отклоняет отзыв самому себе без сделки -> 400', async () => {
     const res = await request(app)
       .post('/api/reviews')
       .set('Authorization', `Bearer ${buyerToken}`)
-      .send({ revieweeId: sellerId, rating: 5, text: 'Без сделки нельзя' });
+      .send({ revieweeId: buyerId, rating: 5, text: 'Сам себе' });
     expect(res.status).toBe(400);
   });
 });
