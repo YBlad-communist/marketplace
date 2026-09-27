@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:20-alpine3.20 AS base
 RUN apk add --no-cache openssl
 RUN corepack enable && corepack prepare pnpm@9 --activate
 WORKDIR /app
@@ -18,7 +18,7 @@ RUN pnpm --filter @marketplace/shared build
 RUN pnpm --filter @marketplace/db build
 RUN pnpm --filter @marketplace/worker build
 
-FROM node:20-alpine AS runtime
+FROM node:20-alpine3.20 AS runtime
 RUN apk add --no-cache openssl
 ENV NODE_ENV=production
 WORKDIR /app/apps/worker
