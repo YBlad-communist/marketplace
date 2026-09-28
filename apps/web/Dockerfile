@@ -9,10 +9,10 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/db/package.json packages/db/
 COPY apps/worker/package.json apps/worker/
-RUN pnpm install --no-frozen-lockfile --config.node-linker=hoisted --config.shamefully-hoist=true --config.auto-install-peers=true
+RUN pnpm install --no-frozen-lockfile
 
 FROM base AS build
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app ./
 COPY . .
 RUN pnpm --filter @marketplace/shared build
 RUN pnpm --filter @marketplace/db build
@@ -25,6 +25,7 @@ WORKDIR /app/apps/worker
 COPY --from=build /app/apps/worker/dist ./dist
 COPY --from=build /app/apps/worker/package.json ./
 COPY --from=build /app/node_modules /app/node_modules
+COPY --from=build /app/apps/worker/node_modules /app/apps/worker/node_modules
 COPY --from=build /app/packages/shared/dist /app/packages/shared/dist
 COPY --from=build /app/packages/shared/package.json /app/packages/shared/package.json
 COPY --from=build /app/packages/db/dist /app/packages/db/dist
