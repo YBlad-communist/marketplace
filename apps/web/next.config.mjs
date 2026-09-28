@@ -37,7 +37,7 @@ const nextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' https://yookassa.ru https://*.yookassa.ru",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: https: http:",
+              "img-src 'self' data: blob: https: http:",
               `connect-src 'self' ${apiOrigin} ${wsOrigin} http://localhost:3000 http://localhost:4000 http://localhost:9000 http://127.0.0.1:3000 http://127.0.0.1:4000 http://127.0.0.1:9000 http://10.193.114.172:3000 http://10.193.114.172:4000 http://10.193.114.172:9000 ws://localhost:4000 ws://127.0.0.1:4000 ws://10.193.114.172:4000 https://yookassa.ru https://*.yookassa.ru wss://yookassa.ru wss://*.yookassa.ru`,
               "frame-src https://yookassa.ru https://*.yookassa.ru",
               "frame-ancestors 'none'",
