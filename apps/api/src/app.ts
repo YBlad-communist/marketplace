@@ -31,17 +31,26 @@ export function createApp(): Express {
   // подделки игнорируются.
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
-  if (isProd) {
+   if (isProd) {
     app.use(
       helmet({
         hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
         contentSecurityPolicy: {
           directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'"],
-            imgSrc: ["'self'", 'data:', 'https:'],
+            scriptSrc: ["'self'", "'unsafe-inline'", 'https://yookassa.ru', 'https://*.yookassa.ru'],
+            imgSrc: ["'self'", 'data:', 'blob:', 'https:', 'http:'],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            connectSrc: ["'self'"],
+            connectSrc: [
+              "'self'",
+              'http://rinokru.com',
+              'https://rinokru.com',
+              'ws://rinokru.com',
+              'wss://rinokru.com',
+              'http://localhost:3000',
+              'http://localhost:4000',
+            ],
+            frameSrc: ["'self'", 'https://yookassa.ru', 'https://*.yookassa.ru'],
           },
         },
       })
