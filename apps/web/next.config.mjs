@@ -25,7 +25,7 @@ const nextConfig = {
     // а nonce потребовал бы middleware. Остальные директивы держим строгими.
     // connect-src/img-src покрывают API (:4000), S3 (:9000) и ЮKassa —
     // без этого дохнут сокеты, загрузка фото и гидрация.
-    const apiOrigin = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+    const apiOrigin = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
     const wsOrigin = apiOrigin.replace(/^http/, 'ws');
     return [
       {
