@@ -1,5 +1,62 @@
 # РынокRU — доска объявлений (Avito-like)
 
+## Деплой на VPS (Ubuntu 24.04)
+
+### Требования
+- VPS с 2+ ГБ RAM
+- Ubuntu 24.04
+- Node.js 20, pnpm 9
+- Docker (для PostgreSQL, Redis, MinIO)
+- nginx, pm2, certbot
+
+### Установка
+1. Клонировать репо: `git clone <url> /root/marketplace`
+2. Установить Node.js 20 и pnpm 9:
+```
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+npm install -g pnpm@9 pm2
+```
+3. Установить Docker и запустить инфраструктуру:
+```
+cd /root/marketplace
+docker compose up -d postgres redis minio mailhog createbuckets
+```
+4. Установить зависимости и собрать:
+```
+pnpm install --no-frozen-lockfile
+pnpm --filter @marketplace/shared build
+pnpm --filter @marketplace/db build
+pnpm --filter @marketplace/api build
+pnpm --filter @marketplace/worker build
+pnpm --filter @marketplace/web build
+```
+5. Применить миграции Prisma:
+```
+cd packages/db && pnpm exec prisma migrate deploy && cd ../..
+```
+6. Установить nginx и скопировать конфиг:
+```
+apt install -y nginx certbot python3-certbot-nginx
+cp deploy/nginx.conf /etc/nginx/sites-available/rinokru
+ln -sf /etc/nginx/sites-available/rinokru /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl reload nginx
+```
+7. Запустить приложения через pm2:
+```
+pm2 start /root/marketplace/start-api.sh --name api
+pm2 start /root/marketplace/start-worker.sh --name worker
+pm2 start /root/marketplace/start-web.sh --name web
+pm2 save
+pm2 startup
+```
+8. Получить SSL (после того как DNS пропагируется):
+```
+certbot --nginx -d rinokru.com -d www.rinokru.com -d s3.rinokru.com
+```
+
+---
 Full-stack: **Next.js 14 (web) + Express (api) + BullMQ worker + PostgreSQL + Redis + MinIO (S3) + ЮKassa (эскроу, сплитование платежей)**. Монорепо на pnpm.
 
 ---

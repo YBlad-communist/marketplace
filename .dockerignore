@@ -5,7 +5,5 @@ apps/*/dist
 packages/*/dist
 dump.rdb
 .git
-.env
-apps/*/.env
 apps/*/.env.local
 *.log

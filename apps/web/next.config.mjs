@@ -12,21 +12,15 @@ const nextConfig = {
   images: {
     remotePatterns: [
       { protocol: 'http', hostname: 'localhost', port: '9000' },
+      { protocol: 'http', hostname: 's3.rinokru.com' },
+      { protocol: 'https', hostname: 's3.rinokru.com' },
       { protocol: 'https', hostname: '**' },
     ],
   },
   async headers() {
-    // Строгий CSP — только для production: в dev-режиме Next.js сам
-    // инжектит inline-скрипты и использует eval (react-refresh/HMR),
-    // поэтому там эти заголовки ломали бы страницу (см. ошибки CSP в консоли).
     if (process.env.NODE_ENV !== 'production') return [];
-    // DECISION: script-src вынужденно содержит 'unsafe-inline' — Next.js 15
-    // встраивает runtime-скрипты инлайном, их хэши меняются каждую сборку,
-    // а nonce потребовал бы middleware. Остальные директивы держим строгими.
-    // connect-src/img-src покрывают API (:4000), S3 (:9000) и ЮKassa —
-    // без этого дохнут сокеты, загрузка фото и гидрация.
     const apiOrigin = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-    // Убираем путь /api — WebSocket живёт на /socket.io/, а не на /api/...
+    // Убираем путь /api — WebSocket живёт на /socket.io/, а не на /api/.
     const apiHost = apiOrigin.replace(/\/api\/?$/, '');
     const wsOrigin = apiHost.replace(/^http/, 'ws');
     return [
@@ -39,8 +33,8 @@ const nextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' https://yookassa.ru https://*.yookassa.ru",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob: https: http:",
-              `connect-src 'self' ${apiOrigin} ${wsOrigin} ws://rinokru.com wss://rinokru.com http://rinokru.com https://rinokru.com http://localhost:3000 http://localhost:4000 http://localhost:9000 http://127.0.0.1:3000 http://127.0.0.1:4000 http://127.0.0.1:9000 http://10.193.114.172:3000 http://10.193.114.172:4000 http://10.193.114.172:9000 ws://localhost:4000 ws://127.0.0.1:4000 ws://10.193.114.172:4000 https://yookassa.ru https://*.yookassa.ru wss://yookassa.ru wss://*.yookassa.ru`,
+              "img-src 'self' data: blob: http://s3.rinokru.com https://s3.rinokru.com https: http:",
+              `connect-src 'self' ${apiOrigin} ${wsOrigin} http://rinokru.com https://rinokru.com ws://rinokru.com wss://rinokru.com http://s3.rinokru.com https://s3.rinokru.com http://localhost:3000 http://localhost:4000 http://localhost:9000 http://127.0.0.1:3000 http://127.0.0.1:4000 http://127.0.0.1:9000 ws://localhost:4000 ws://127.0.0.1:4000 https://yookassa.ru https://*.yookassa.ru wss://yookassa.ru wss://*.yookassa.ru`,
               "frame-src https://yookassa.ru https://*.yookassa.ru",
               "frame-ancestors 'none'",
             ].join('; '),
