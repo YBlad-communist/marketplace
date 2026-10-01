@@ -37,6 +37,31 @@ export interface CategoryAttributeDto {
   max?: number | null;
 }
 
+export interface CityDto {
+  id: string;
+  name: string;
+  slug: string;
+  regionId: string;
+  sortOrder?: number;
+  isActive?: boolean;
+}
+
+export interface RegionDto {
+  id: string;
+  name: string;
+  slug: string;
+  sortOrder?: number;
+  isActive?: boolean;
+  cities: CityDto[];
+}
+
+export interface CityRefDto {
+  id: string;
+  name: string;
+  slug: string;
+  region: { id: string; name: string; slug: string };
+}
+
 export interface ListingDto {
   id: string;
   title: string;
@@ -45,6 +70,8 @@ export interface ListingDto {
   currency: string;
   status: string;
   city: string;
+  cityId?: string | null;
+  cityRef?: CityRefDto | null;
   lat?: number | null;
   lng?: number | null;
   attributes: Record<string, string | number | boolean | null>;

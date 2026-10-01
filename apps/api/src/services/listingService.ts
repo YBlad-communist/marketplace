@@ -16,6 +16,14 @@ const listingInclude = {
     },
   },
   category: { select: { id: true, name: true, slug: true, parent: { select: { id: true, name: true, slug: true } } } },
+  cityRef: {
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      region: { select: { id: true, name: true, slug: true } },
+    },
+  },
 };
 
 type SearchRow = { id: string; rank: number };
@@ -58,7 +66,24 @@ export function decodeCursor(cursor: string): { primary: Date | number; id: stri
   }
 }
 
-function buildWhere(input: ListingQueryInput): Prisma.ListingWhereInput {
+/**
+ * Все id поддерева категории (включая саму) — рекурсивный CTE одним запросом.
+ * Нужно для фильтра categoryId: объявление считается подходящим, если лежит
+ * в выбранной категории или любом её потомке на любой глубине.
+ */
+export async function descendantCategoryIds(rootId: string): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM "Category" WHERE id = ${rootId}
+      UNION ALL
+      SELECT c.id FROM "Category" c JOIN subtree s ON c."parentId" = s.id
+    )
+    SELECT id FROM subtree
+  `;
+  return rows.map((r) => r.id);
+}
+
+function buildWhereSync(input: ListingQueryInput): Prisma.ListingWhereInput {
   const where: Prisma.ListingWhereInput = {};
   // Статус — опциональный фильтр: учитывается только если передан явно.
   // Дефолт ACTIVE сохраняется для публичного контекста (без sellerId);
@@ -72,6 +97,21 @@ function buildWhere(input: ListingQueryInput): Prisma.ListingWhereInput {
     where.OR = [{ categoryId: input.category }, { category: { parentId: input.category } }];
   }
   if (input.city) where.city = input.city;
+  if (input.cityId) where.cityId = input.cityId;
+  // Текстовый запрос и для обычных сортировок: раньше q применялся только при
+  // sort=relevance (полный текст), из-за чего поиск с датой/ценой молча
+  // возвращал всё. AND-группа не конфликтует с OR (категория).
+  const term = input.q?.trim();
+  if (term) {
+    const textCond: Prisma.ListingWhereInput = {
+      OR: [
+        { title: { contains: term, mode: 'insensitive' } },
+        { description: { contains: term, mode: 'insensitive' } },
+      ],
+    };
+    const baseAnd = where.AND ? (Array.isArray(where.AND) ? where.AND : [where.AND]) : [];
+    where.AND = [...baseAnd, textCond] as Prisma.ListingWhereInput['AND'];
+  }
   if (input.sellerId) where.sellerId = input.sellerId;
   if (input.favoritesOf) where.favoritedBy = { some: { userId: input.favoritesOf } };
 
@@ -113,6 +153,31 @@ function buildWhere(input: ListingQueryInput): Prisma.ListingWhereInput {
   return where;
 }
 
+/**
+ * Итоговый where: синхронная часть + async-фильтры по иерархии
+ * (categoryId → все потомки, regionId → города региона).
+ */
+async function buildWhere(input: ListingQueryInput): Promise<Prisma.ListingWhereInput> {
+  const where = buildWhereSync(input);
+
+  if (input.categoryId) {
+    const ids = await descendantCategoryIds(input.categoryId);
+    where.categoryId = { in: ids };
+  }
+
+  if (input.regionId) {
+    const cities = await prisma.city.findMany({ where: { regionId: input.regionId }, select: { id: true } });
+    if (cities.length === 0) {
+      // В регионе нет городов → результат пустой (пустой OR/AND пропустил бы всё).
+      where.id = '___no_such_region___';
+    } else {
+      where.cityId = { in: cities.map((c) => c.id) };
+    }
+  }
+
+  return where;
+}
+
 /** Поиск по тексту: PostgreSQL full-text + ILIKE + pg_trgm. Возвращает id + rank. */
 async function textSearchIds(
   q: string,
@@ -138,6 +203,22 @@ async function textSearchIds(
     conditions.push(
       Prisma.sql`("Listing"."categoryId" = ${input.category} OR "Listing"."categoryId" IN (SELECT id FROM "Category" WHERE "parentId" = ${input.category}))`
     );
+  }
+  // Иерархия: buildWhere уже развернул categoryId/regionId в плоские in-списки.
+  const catIdFilter = whereBase.categoryId;
+  if (typeof catIdFilter === 'object' && catIdFilter !== null && 'in' in catIdFilter) {
+    const ids = (catIdFilter as { in: string[] }).in;
+    conditions.push(Prisma.sql`"Listing"."categoryId" IN (${Prisma.join(ids)})`);
+  }
+  const cityIdFilter = whereBase.cityId;
+  if (typeof cityIdFilter === 'string') {
+    conditions.push(Prisma.sql`"Listing"."cityId" = ${cityIdFilter}`);
+  } else if (typeof cityIdFilter === 'object' && cityIdFilter !== null && 'in' in cityIdFilter) {
+    const ids = (cityIdFilter as { in: string[] }).in;
+    conditions.push(Prisma.sql`"Listing"."cityId" IN (${Prisma.join(ids)})`);
+  }
+  if (whereBase.id === '___no_such_region___') {
+    conditions.push(Prisma.sql`FALSE`);
   }
   if (whereBase.city) conditions.push(Prisma.sql`"Listing"."city" = ${whereBase.city}`);
   if (whereBase.sellerId) conditions.push(Prisma.sql`"Listing"."sellerId" = ${whereBase.sellerId}`);
@@ -185,7 +266,7 @@ async function textSearchIds(
 
 export async function searchListings(input: ListingQueryInput, viewerId?: string) {
   const limit = Math.min(input.limit ?? CURSOR_PAGE_SIZE, 50);
-  const where = buildWhere(input);
+  const where = await buildWhere(input);
   const sort = sortOptions(input.sort);
 
   if (input.q && input.sort === 'relevance') {
@@ -302,6 +383,14 @@ export function listingByIdInclude(favorites = new Set<string>()) {
       include: {
         parent: { select: { id: true, name: true, slug: true } },
         attributes: { orderBy: { sortOrder: 'asc' as const } },
+      },
+    },
+    cityRef: {
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        region: { select: { id: true, name: true, slug: true } },
       },
     },
     favoritedBy: true,

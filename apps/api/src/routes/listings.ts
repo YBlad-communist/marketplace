@@ -126,6 +126,19 @@ router.post(
   async (req, res, next) => {
     try {
       const input = req.body;
+      // cityId — новая иерархия (регион → город); строковое city остаётся
+      // обязательным (fallback для старых клиентов/данных). Если cityId передан,
+      // сверяем, что город существует, и подставляем его название в city.
+      let cityId: string | null = null;
+      let city = input.city;
+      if (input.cityId) {
+        const cityRef = await prisma.city.findUnique({ where: { id: input.cityId } });
+        if (!cityRef) {
+          throw new AppError(errorCodes.VALIDATION, 'Город из списка не найден', 400);
+        }
+        cityId = cityRef.id;
+        city = cityRef.name;
+      }
       const moderation = await moderateListingContent({
         title: input.title,
         description: input.description,
@@ -141,7 +154,8 @@ router.post(
           status,
           sellerId: req.userId!,
           categoryId: input.categoryId,
-          city: input.city,
+          city,
+          cityId,
           lat: input.lat,
           lng: input.lng,
           attributes: input.attributes ?? {},
@@ -206,6 +220,18 @@ router.patch(
       }
       const data: Record<string, unknown> = { ...req.body };
       delete data.imageKeys;
+
+      // cityId при редактировании: сверяем город и синхронизируем строку city.
+      if ('cityId' in data) {
+        const cid = data.cityId as string | null | undefined;
+        if (cid) {
+          const cityRef = await prisma.city.findUnique({ where: { id: cid } });
+          if (!cityRef) {
+            throw new AppError(errorCodes.VALIDATION, 'Город из списка не найден', 400);
+          }
+          data.city = cityRef.name;
+        }
+      }
 
       // Цена и статус участвуют в исполнении активных заказов (эскроу считает
       // fee от price, статус RESERVED предотвращает повторные покупки):

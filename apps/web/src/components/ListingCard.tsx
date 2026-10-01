@@ -83,7 +83,7 @@ export function ListingCard({ listing }: { listing: ListingDto }) {
           </div>
           <div className="mt-0.5 line-clamp-2 min-h-10 text-sm leading-body text-textPrimary">{listing.title}</div>
           <div className="muted-xs mt-1.5 flex items-center justify-between gap-2">
-            <span className="truncate">{listing.city}</span>
+            <span className="truncate">{listing.city || listing.cityRef?.name || ''}</span>
             <span className="shrink-0">{formatDate(listing.createdAt)}</span>
           </div>
         </div>

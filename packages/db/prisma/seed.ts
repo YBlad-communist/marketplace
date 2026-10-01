@@ -16,6 +16,8 @@ const categories = [
       { name: 'Смартфоны', slug: 'smartphones', attributes: [{ key: 'storage', label: 'Память', type: 'SELECT', options: ['64GB', '128GB', '256GB', '512GB'] }] },
       { name: 'Ноутбуки', slug: 'laptops', attributes: [{ key: 'ram', label: 'RAM', type: 'SELECT', options: ['8GB', '16GB', '32GB'] }] },
       { name: 'Фото и видео', slug: 'cameras', attributes: [] },
+      { name: 'Телефоны', slug: 'phones', attributes: [], children: [{ name: 'Кнопочные', slug: 'feature-phones', attributes: [] }] },
+      { name: 'Компьютеры', slug: 'computers', attributes: [], children: [{ name: 'Мониторы', slug: 'monitors', attributes: [] }] },
     ],
   },
   {
@@ -54,10 +56,65 @@ const categories = [
     children: [],
   },
   {
+    name: 'Транспорт',
+    slug: 'transport',
+    attributes: [],
+    children: [
+      { name: 'Автомобили', slug: 'cars', attributes: [], children: [] },
+      { name: 'Мотоциклы', slug: 'motorcycles', attributes: [], children: [] },
+    ],
+  },
+  {
     name: 'Услуги',
     slug: 'services',
     attributes: [{ key: 'priceType', label: 'Оплата', type: 'SELECT', options: ['За час', 'За работу'] }],
     children: [],
+  },
+  {
+    name: 'Работа',
+    slug: 'jobs',
+    attributes: [],
+    children: [],
+  },
+];
+
+// Стартовые локации: регион → города (идемпотентно через upsert).
+const regions = [
+  {
+    name: 'Краснодарский край',
+    slug: 'krasnodar',
+    cities: [
+      { name: 'Приморско-Ахтарск', slug: 'primorsko-ahtarsk' },
+      { name: 'Краснодар', slug: 'krasnodar-city' },
+      { name: 'Сочи', slug: 'sochi' },
+      { name: 'Новороссийск', slug: 'novorossiysk' },
+    ],
+  },
+  {
+    name: 'Ростовская область',
+    slug: 'rostov',
+    cities: [
+      { name: 'Ростов-на-Дону', slug: 'rostov-on-don' },
+      { name: 'Таганрог', slug: 'taganrog' },
+    ],
+  },
+  {
+    name: 'Москва',
+    slug: 'moscow',
+    cities: [{ name: 'Москва', slug: 'moscow-city' }],
+  },
+  {
+    name: 'Московская область',
+    slug: 'mosobl',
+    cities: [
+      { name: 'Балашиха', slug: 'balashiha' },
+      { name: 'Химки', slug: 'himki' },
+    ],
+  },
+  {
+    name: 'Санкт-Петербург',
+    slug: 'spb',
+    cities: [{ name: 'Санкт-Петербург', slug: 'spb-city' }],
   },
 ];
 
@@ -90,36 +147,51 @@ create: {
     },
   });
 
-  for (const cat of categories) {
-    const parent = await prisma.category.upsert({
-      where: { slug: cat.slug },
+  // Рекурсивный сид дерева (идемпотентно): существующие slug не трогаем,
+  // чтобы не ломать объявления и тесты, завязанные на старые категории.
+  async function seedCategory(
+    node: { name: string; slug: string; attributes: any[]; children?: any[] },
+    parentId: string | null
+  ): Promise<string> {
+    const c = await prisma.category.upsert({
+      where: { slug: node.slug },
       update: {},
-      create: { name: cat.name, slug: cat.slug },
+      create: { name: node.name, slug: node.slug, parentId },
     });
-    for (const attr of cat.attributes) {
+    for (const attr of node.attributes) {
       await prisma.categoryAttribute.upsert({
-        where: { categoryId_key: { categoryId: parent.id, key: attr.key } },
+        where: { categoryId_key: { categoryId: c.id, key: attr.key } },
         update: {},
-        create: { categoryId: parent.id, ...attr },
+        create: { categoryId: c.id, ...attr },
       });
     }
-    for (const child of cat.children) {
-      const c = await prisma.category.upsert({
-        where: { slug: child.slug },
-        update: {},
-        create: { name: child.name, slug: child.slug, parentId: parent.id },
-      });
-      for (const attr of child.attributes) {
-        await prisma.categoryAttribute.upsert({
-          where: { categoryId_key: { categoryId: c.id, key: attr.key } },
-          update: {},
-          create: { categoryId: c.id, ...attr },
-        });
-      }
+    for (const child of node.children ?? []) {
+      await seedCategory(child, c.id);
     }
+    return c.id;
+  }
+
+  for (const cat of categories) {
+    await seedCategory(cat, null);
   }
 
   console.log(`Seed done. admin=${admin.email} demo=${demo.email}`);
+
+  for (const region of regions) {
+    const r = await prisma.region.upsert({
+      where: { slug: region.slug },
+      update: {},
+      create: { name: region.name, slug: region.slug },
+    });
+    for (const city of region.cities) {
+      await prisma.city.upsert({
+        where: { regionId_slug: { regionId: r.id, slug: city.slug } },
+        update: {},
+        create: { name: city.name, slug: city.slug, regionId: r.id },
+      });
+    }
+  }
+  console.log(`Seed regions done: ${regions.length}`);
 }
 
 main()

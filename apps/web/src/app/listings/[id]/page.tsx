@@ -236,7 +236,7 @@ export default function ListingPage() {
               <div>
                 <h1 className="text-2xl font-bold tracking-tight">{listing.title}</h1>
                 <div className="muted-xs mt-1">
-                  {listing.city} · {formatDate(listing.createdAt)} · {listing.viewsCount} просм.
+                  {listing.city || listing.cityRef?.name || ''} · {formatDate(listing.createdAt)} · {listing.viewsCount} просм.
                 </div>
               </div>
               <button
