@@ -8,7 +8,7 @@ import { Header } from '@/components/Header';
 import { ListingCard } from '@/components/ListingCard';
 import { CardSkeleton, EmptyState, Pagination } from '@/components/ui/primitives';
 import { get } from '@/lib/api';
-import { CategoryDto, CursorPage, ListingDto } from '@/lib/types';
+import { CategoryDto, CursorPage, ListingDto, RegionDto } from '@/lib/types';
 import { cn } from '@/lib/format';
 
 function SortChips({ sort, onSort }: { sort: string; onSort: (id: string) => void }) {
@@ -45,6 +45,8 @@ function HomeContent() {
   const [q, setQ] = useState('');
   const [category, setCategory] = useState('');
   const [city, setCity] = useState('');
+  const [regionId, setRegionId] = useState('');
+  const [cityId, setCityId] = useState('');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [sort, setSort] = useState('date_desc');
@@ -54,18 +56,25 @@ function HomeContent() {
 
   // DECISION: шапка и плитки категорий ведут на /?q=../?cat=.. — синхронизируем
   // их со state один раз на изменение URL, логика запросов не меняется.
+  // Плюс иерархические фильтры: ?region=<id>&city=<cityId>.
   const syncedUrl = useRef('');
   useEffect(() => {
     const key = searchParams.toString();
     if (key === syncedUrl.current) return;
     syncedUrl.current = key;
     const qParam = searchParams.get('q') ?? '';
-    const catParam = searchParams.get('cat') ?? '';
+    const catParam = searchParams.get('cat') ?? searchParams.get('category') ?? '';
+    const regionParam = searchParams.get('region') ?? '';
+    const cityParam = searchParams.get('city') ?? '';
     setQ(qParam);
     setCategory(catParam);
+    setRegionId(regionParam);
+    setCityId(cityParam);
     setAppliedFilters({
       q: qParam.trim(),
       category: catParam,
+      regionId: regionParam,
+      cityId: cityParam,
       city: '',
       minPrice: '',
       maxPrice: '',
@@ -79,12 +88,22 @@ function HomeContent() {
   });
   const categories = categoriesQuery.data?.data.categories ?? [];
 
+  const regionsQuery = useQuery({
+    queryKey: ['regions'],
+    queryFn: () => get<{ data: { regions: RegionDto[] } }>('/api/regions'),
+    staleTime: 5 * 60_000,
+  });
+  const regions = regionsQuery.data?.data.regions ?? [];
+  const selectedRegion = regions.find((r) => r.id === regionId);
+
   const listingsQuery = useQuery({
     queryKey: ['listings', appliedFilters, sort],
     queryFn: () => {
       const params = new URLSearchParams({ sort, limit: '20' });
       if (appliedFilters.q) params.set('q', appliedFilters.q);
-      if (appliedFilters.category) params.set('category', appliedFilters.category);
+      if (appliedFilters.category) params.set('categoryId', appliedFilters.category);
+      if (appliedFilters.regionId) params.set('regionId', appliedFilters.regionId);
+      if (appliedFilters.cityId) params.set('cityId', appliedFilters.cityId);
       if (appliedFilters.city) params.set('city', appliedFilters.city);
       if (appliedFilters.minPrice) params.set('minPrice', appliedFilters.minPrice);
       if (appliedFilters.maxPrice) params.set('maxPrice', appliedFilters.maxPrice);
@@ -96,7 +115,9 @@ function HomeContent() {
     setAppliedFilters({
       q: (next?.q ?? q).trim(),
       category: next?.category ?? category,
-      city: city.trim(),
+      regionId,
+      cityId,
+      city: regions.length > 0 ? '' : city.trim(),
       minPrice: minPrice.trim(),
       maxPrice: maxPrice.trim(),
     });
@@ -107,7 +128,36 @@ function HomeContent() {
     setAppliedFilters({
       q: q.trim(),
       category: id,
-      city: city.trim(),
+      regionId,
+      cityId,
+      city: regions.length > 0 ? '' : city.trim(),
+      minPrice: minPrice.trim(),
+      maxPrice: maxPrice.trim(),
+    });
+  };
+
+  const pickRegion = (id: string) => {
+    setRegionId(id);
+    setCityId('');
+    setAppliedFilters({
+      q: q.trim(),
+      category,
+      regionId: id,
+      cityId: '',
+      city: '',
+      minPrice: minPrice.trim(),
+      maxPrice: maxPrice.trim(),
+    });
+  };
+
+  const pickCity = (id: string) => {
+    setCityId(id);
+    setAppliedFilters({
+      q: q.trim(),
+      category,
+      regionId,
+      cityId: id,
+      city: '',
       minPrice: minPrice.trim(),
       maxPrice: maxPrice.trim(),
     });
@@ -118,7 +168,9 @@ function HomeContent() {
     if (!cursor) return;
     const params = new URLSearchParams({ sort, limit: '20', cursor });
     if (appliedFilters.q) params.set('q', appliedFilters.q);
-    if (appliedFilters.category) params.set('category', appliedFilters.category);
+    if (appliedFilters.category) params.set('categoryId', appliedFilters.category);
+    if (appliedFilters.regionId) params.set('regionId', appliedFilters.regionId);
+    if (appliedFilters.cityId) params.set('cityId', appliedFilters.cityId);
     if (appliedFilters.city) params.set('city', appliedFilters.city);
     if (appliedFilters.minPrice) params.set('minPrice', appliedFilters.minPrice);
     if (appliedFilters.maxPrice) params.set('maxPrice', appliedFilters.maxPrice);
@@ -235,11 +287,16 @@ function HomeContent() {
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>,
-                  ...(c.children ?? []).map((ch) => (
+                  ...(c.children ?? []).flatMap((ch) => [
                     <option key={ch.id} value={ch.id}>
                       {c.name} — {ch.name}
-                    </option>
-                  )),
+                    </option>,
+                    ...(ch.children ?? []).map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {c.name} — {ch.name} — {g.name}
+                      </option>
+                    )),
+                  ]),
                 ])}
               </select>
             </div>
@@ -257,18 +314,62 @@ function HomeContent() {
 
           {filtersOpen && (
             <div id="home-extra-filters" className="mt-3 grid gap-3 md:grid-cols-3">
-              <div>
-                <label className="sr-only" htmlFor="home-city">
-                  Город
-                </label>
-                <input
-                  id="home-city"
-                  className="input"
-                  placeholder="Город"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                />
-              </div>
+              {regions.length > 0 ? (
+                <>
+                  <div>
+                    <label className="sr-only" htmlFor="home-region">
+                      Регион
+                    </label>
+                    <select
+                      id="home-region"
+                      className="input"
+                      value={regionId}
+                      onChange={(e) => pickRegion(e.target.value)}
+                    >
+                      <option value="">Все регионы</option>
+                      {regions.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="sr-only" htmlFor="home-city-select">
+                      Город
+                    </label>
+                    <select
+                      id="home-city-select"
+                      className="input"
+                      value={cityId}
+                      onChange={(e) => pickCity(e.target.value)}
+                      disabled={!selectedRegion}
+                    >
+                      <option value="">
+                        {selectedRegion ? 'Все города' : 'Сначала регион'}
+                      </option>
+                      {(selectedRegion?.cities ?? []).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label className="sr-only" htmlFor="home-city">
+                    Город
+                  </label>
+                  <input
+                    id="home-city"
+                    className="input"
+                    placeholder="Город"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                  />
+                </div>
+              )}
               <div className="flex gap-2">
                 <div className="flex-1">
                   <label className="sr-only" htmlFor="home-min">

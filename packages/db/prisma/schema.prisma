@@ -111,6 +111,9 @@ model Category {
   attributes CategoryAttribute[]
   listings   Listing[]
   sortOrder  Int               @default(0)
+  isActive   Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
 
   @@index([parentId])
 }
@@ -144,6 +147,10 @@ model Listing {
   categoryId  String
   category    Category          @relation(fields: [categoryId], references: [id])
   city        String
+  // Связь с локацией (регион → город): новые объявления создаются через cityId,
+  // строковое city остаётся для обратной совместимости (fallback при чтении).
+  cityId      String?
+  cityRef     City?             @relation(fields: [cityId], references: [id])
   lat         Float?
   lng         Float?
   attributes  Json              @default("{}")
@@ -164,6 +171,36 @@ model Listing {
   @@index([status, price])
   @@index([sellerId, status])
   @@index([city, status])
+  @@index([cityId])
+}
+
+model Region {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  cities    City[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+}
+
+model City {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String
+  regionId  String
+  region    Region    @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
+  listings  Listing[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([regionId, slug])
+  @@index([regionId])
 }
 
 model ListingImage {

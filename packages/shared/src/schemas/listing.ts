@@ -20,6 +20,10 @@ export const listingCreateSchema = z.object({
     .describe('Единственная поддерживаемая валюта — российский рубль'),
   categoryId: z.string().cuid(),
   city: citySchema,
+  // Новые объявления привязываются к локации через cityId (регион → город);
+  // строковое city остаётся обязательным для обратной совместимости и
+  // заполняется названием выбранного города на фронте.
+  cityId: z.string().cuid().optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
   attributes: attributesSchema,
@@ -47,6 +51,11 @@ export const listingUpdateSchema = listingCreateSchema
 export const listingQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   category: z.string().cuid().optional(),
+  // Новые иерархические фильтры (старые category/city сохранены для совместимости):
+  // categoryId ищет включая всех потомков, regionId — по всем городам региона.
+  categoryId: z.string().cuid().optional(),
+  regionId: z.string().cuid().optional(),
+  cityId: z.string().cuid().optional(),
   city: z.string().trim().max(120).optional(),
   minPrice: z.coerce.number().min(0).optional(),
   maxPrice: z.coerce.number().min(0).optional(),

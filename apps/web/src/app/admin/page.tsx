@@ -114,6 +114,17 @@ export default function AdminPage() {
       <main className="container-x py-8">
         <h1 className="section-title mb-6">Модерация</h1>
 
+        {isAdmin && (
+          <div className="mb-6 flex flex-wrap gap-2">
+            <Link href="/admin/categories" className="btn-secondary text-xs">
+              Категории
+            </Link>
+            <Link href="/admin/locations" className="btn-secondary text-xs">
+              Локации
+            </Link>
+          </div>
+        )}
+
         <div className="mb-6 flex gap-2" role="tablist" aria-label="Разделы модерации">
           {tabs.map((t) => (
             <button

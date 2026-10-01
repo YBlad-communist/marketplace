@@ -10,6 +10,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import categoryRoutes from './routes/categories.js';
+import locationRoutes from './routes/locations.js';
 import listingRoutes from './routes/listings.js';
 import conversationRoutes from './routes/conversations.js';
 import orderRoutes from './routes/orders.js';
@@ -107,6 +108,7 @@ export function createApp(): Express {
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/categories', categoryRoutes);
+  app.use('/api', locationRoutes);
   app.use('/api/listings', listingRoutes);
   app.use('/api/conversations', conversationRoutes);
   app.use('/api/orders', orderRoutes);
