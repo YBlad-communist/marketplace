@@ -5,8 +5,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/lib/auth-store';
-import { get, post, setAccessToken } from '@/lib/api';
-import { disconnectSocket } from '@/lib/socket';
+import { get } from '@/lib/api';
+import { useLogout } from '@/lib/logout';
 import { CategoryDto, ConversationDto } from '@/lib/types';
 import { cn } from '@/lib/format';
 
@@ -77,10 +77,11 @@ function IconLink({ href, label, active, badge, children }: { href: string; labe
 }
 
 export function Header() {
-  const { user, setUser } = useAuthStore();
+  const user = useAuthStore((s) => s.user);
   const checked = useAuthStore((s) => s.checked);
   const router = useRouter();
   const pathname = usePathname();
+  const logout = useLogout();
   const [q, setQ] = useState('');
   const [catalogOpen, setCatalogOpen] = useState(false);
   // Пока /me не ответил — показываем скелетон места под навигацию, иначе шапка
@@ -113,15 +114,6 @@ export function Header() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [catalogOpen]);
-
-  const logout = async () => {
-    await post('/api/auth/logout').catch(() => undefined);
-    setAccessToken(null);
-    disconnectSocket();
-    setUser(null);
-    router.push('/');
-    router.refresh();
-  };
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
 

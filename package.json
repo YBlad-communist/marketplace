@@ -17,6 +17,7 @@
     "db:migrate": "pnpm --filter @marketplace/db db:migrate",
     "db:deploy": "pnpm --filter @marketplace/db db:deploy",
     "db:seed": "pnpm --filter @marketplace/db db:seed",
+    "create:admin": "pnpm --filter @marketplace/db db:create-admin",
     "audit": "pnpm audit --prod"
   },
   "devDependencies": {

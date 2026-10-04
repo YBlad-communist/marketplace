@@ -99,7 +99,8 @@ docker compose up -d postgres redis minio createbuckets mailhog
 # если Docker нет — запустите Postgres и Redis локально (MinIO опционально)
 
 pnpm db:deploy                # миграции (или pnpm --filter @marketplace/db db:push для dev)
-pnpm db:seed                  # админ + 5 категорий
+pnpm db:seed                  # категории + регионы (без аккаунтов)
+pnpm create:admin             # создать администратора (интерактивно)
 pnpm dev                      # web :3000, api :4000, worker (3 окна concurrently)
 ```
 
@@ -116,12 +117,19 @@ docker compose logs -f api worker web
 
 `NEXT_PUBLIC_API_URL` и `NEXT_PUBLIC_APP_URL` для web заданы в `docker-compose.yml` (environment). Платёжный виджет ЮKassa (`checkout-widget.js`) публичных ключей не требует — фронт получает `confirmation_token` от бэкенда при создании заказа.
 
-## Тестовые аккаунты (после `pnpm db:seed`)
+## Администратор (после `pnpm db:seed`)
 
-| Роль | Email | Телефон | Пароль |
-|------|-------|---------|--------|
-| Admin | admin@marketplace.local | +79990000001 | Admin123! |
-| Demo-продавец | demo@marketplace.local | +79990001122 | Demo123! |
+Seed не создаёт аккаунтов — администратор заводится из консоли:
+
+```bash
+pnpm create:admin                                        # интерактивно
+# или сразу с параметрами:
+pnpm create:admin -- --email admin@example.com --phone +79991234567 --password 'Secret123'
+```
+
+Требования к паролю: минимум 8 символов, заглавная + строчная буква + цифра.
+Повторный запуск с тем же email обновляет пароль/телефон; вход на сайте — по телефону и паролю.
+Обычные пользователи регистрируются на сайте как обычно.
 
 ## Полный цикл (ручная проверка)
 

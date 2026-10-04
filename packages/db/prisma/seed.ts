@@ -1,5 +1,4 @@
 import { PrismaClient } from '@prisma/client';
-import argon2 from 'argon2';
 
 const prisma = new PrismaClient();
 
@@ -119,33 +118,8 @@ const regions = [
 ];
 
 async function main() {
-  const admin = await prisma.user.upsert({
-    where: { email: 'admin@marketplace.local' },
-    update: {},
-create: {
-        email: 'admin@marketplace.local',
-        phone: '+79990000001',
-        name: 'Администратор',
-        passwordHash: await argon2.hash('Admin123!', { type: argon2.argon2id }),
-        role: 'ADMIN',
-        isVerified: true,
-        phoneVerifiedAt: new Date(),
-      },
-  });
-
-  const demo = await prisma.user.upsert({
-    where: { email: 'demo@marketplace.local' },
-    update: {},
-    create: {
-      email: 'demo@marketplace.local',
-      name: 'Демо-продавец',
-      phone: '+79990001122',
-      city: 'Москва',
-      passwordHash: await argon2.hash('Demo123!', { type: argon2.argon2id }),
-      isVerified: true,
-      phoneVerifiedAt: new Date(),
-    },
-  });
+  // Аккаунты не создаются: администратор заводится через `pnpm create:admin`
+  // (packages/db/scripts/create-admin.ts), обычные — через регистрацию на сайте.
 
   // Рекурсивный сид дерева (идемпотентно): существующие slug не трогаем,
   // чтобы не ломать объявления и тесты, завязанные на старые категории.
@@ -175,7 +149,7 @@ create: {
     await seedCategory(cat, null);
   }
 
-  console.log(`Seed done. admin=${admin.email} demo=${demo.email}`);
+  console.log(`Seed done: ${categories.length} категорий`);
 
   for (const region of regions) {
     const r = await prisma.region.upsert({

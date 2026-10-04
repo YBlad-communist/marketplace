@@ -7,8 +7,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
 import { ProfileEditForm } from '@/components/ProfileEditForm';
 import { VerifyPhoneButton } from '@/components/VerifyPhoneButton';
-import { del, get, post, setAccessToken, ApiError } from '@/lib/api';
-import { disconnectSocket } from '@/lib/socket';
+import { del, get, ApiError } from '@/lib/api';
+import { useLogout } from '@/lib/logout';
 import { useAuthStore } from '@/lib/auth-store';
 import { CursorPage, ListingDto } from '@/lib/types';
 import { formatPrice } from '@/lib/format';
@@ -17,7 +17,7 @@ import { EmptyState, Tabs } from '@/components/ui/primitives';
 export default function CabinetPage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
-  const setUser = useAuthStore((s) => s.setUser);
+  const logout = useLogout();
   const [editingProfile, setEditingProfile] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
@@ -52,12 +52,7 @@ export default function CabinetPage() {
     setDeleteError(null);
     try {
       await del('/api/users/me', { password: deletePassword });
-      await post('/api/auth/logout').catch(() => undefined);
-      setAccessToken(null);
-      disconnectSocket();
-      setUser(null);
-      router.push('/');
-      router.refresh();
+      await logout();
     } catch (err) {
       setDeleteError(err instanceof ApiError ? err.message : 'Не удалось удалить аккаунт');
     } finally {
@@ -127,6 +122,9 @@ export default function CabinetPage() {
               <Link href="/cabinet/sessions" className="btn-secondary text-xs">
                 Активные сессии
               </Link>
+              <button type="button" className="btn-secondary text-xs" onClick={() => logout()}>
+                Выйти
+              </button>
             </div>
           )}
         </div>
