@@ -11,7 +11,9 @@ out/
 coverage/
 
 # env / secrets
-# .env намеренно НЕ игнорируется — коммитим для деплоя
+# Все .env — строго локальные/серверные, в git не попадают (шаблон: .env.example).
+# apps/web/.env.production исключение — там только публичные NEXT_PUBLIC_* значения.
+.env
 .env.local
 .env.*.local
 
