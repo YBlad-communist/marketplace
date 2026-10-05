@@ -238,6 +238,7 @@ export default function ListingPage() {
                 <div className="muted-xs mt-1">
                   {listing.city || listing.cityRef?.name || ''} · {formatDate(listing.createdAt)} · {listing.viewsCount} просм.
                 </div>
+                {listing.address && <div className="muted-xs mt-0.5">Адрес: {listing.address}</div>}
               </div>
               <button
                 className="btn-secondary shrink-0"

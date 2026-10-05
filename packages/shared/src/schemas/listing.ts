@@ -24,6 +24,8 @@ export const listingCreateSchema = z.object({
   // строковое city остаётся обязательным для обратной совместимости и
   // заполняется названием выбранного города на фронте.
   cityId: z.string().cuid().optional(),
+  // Точный адрес — необязательный (до 300 символов, пустое значение отбрасывается).
+  address: z.string().trim().max(300, 'Адрес не длиннее 300 символов').optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
   attributes: attributesSchema,

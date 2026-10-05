@@ -151,6 +151,8 @@ model Listing {
   // строковое city остаётся для обратной совместимости (fallback при чтении).
   cityId      String?
   cityRef     City?             @relation(fields: [cityId], references: [id])
+  // Точный адрес (улица, дом, метро) — необязательное поле объявления.
+  address     String?
   lat         Float?
   lng         Float?
   attributes  Json              @default("{}")

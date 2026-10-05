@@ -72,6 +72,7 @@ export interface ListingDto {
   city: string;
   cityId?: string | null;
   cityRef?: CityRefDto | null;
+  address?: string | null;
   lat?: number | null;
   lng?: number | null;
   attributes: Record<string, string | number | boolean | null>;

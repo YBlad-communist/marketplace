@@ -156,6 +156,7 @@ router.post(
           categoryId: input.categoryId,
           city,
           cityId,
+          address: input.address || null,
           lat: input.lat,
           lng: input.lng,
           attributes: input.attributes ?? {},
@@ -231,6 +232,12 @@ router.patch(
           }
           data.city = cityRef.name;
         }
+      }
+
+      // Адрес необязателен: пустая строка из формы → null, иначе trim.
+      if ('address' in data) {
+        const a = data.address;
+        data.address = typeof a === 'string' && a.trim() ? a.trim() : null;
       }
 
       // Цена и статус участвуют в исполнении активных заказов (эскроу считает

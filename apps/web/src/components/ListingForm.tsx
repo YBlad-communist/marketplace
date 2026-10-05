@@ -94,6 +94,7 @@ export function ListingForm({ mode, initial }: Props) {
   const [description, setDescription] = useState(initial?.description ?? '');
   const [price, setPrice] = useState(initial ? String(initial.price) : '');
   const [city, setCity] = useState(initial?.city ?? '');
+  const [address, setAddress] = useState(initial?.address ?? '');
   const [attributeValues, setAttributeValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(Object.entries(initial?.attributes ?? {}).map(([k, v]) => [k, String(v)]))
   );
@@ -239,6 +240,8 @@ export function ListingForm({ mode, initial }: Props) {
       categoryId,
       city: finalCity,
       ...(cityId ? { cityId } : {}),
+      // Адрес необязателен; пустая строка = сброс (API приводит к null).
+      address: address.trim(),
       attributes: attrsPayload,
       imageKeys,
     };
@@ -342,6 +345,20 @@ export function ListingForm({ mode, initial }: Props) {
           {errors.cityId && <p className="mt-1 text-xs text-danger">{errors.cityId}</p>}
         </div>
       )}
+
+      <div>
+        <label className="label">
+          Адрес <span className="font-normal text-textMuted">— необязательно</span>
+        </label>
+        <input
+          className="input"
+          value={address}
+          maxLength={300}
+          placeholder="Улица, дом, подъезд, метро…"
+          onChange={(e) => setAddress(e.target.value)}
+        />
+        {errors.address && <p className="mt-1 text-xs text-danger">{errors.address}</p>}
+      </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <div>
