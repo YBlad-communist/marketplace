@@ -172,7 +172,7 @@ function RegionBlock({
 export default function AdminLocationsPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
-  const isAdmin = user?.role === 'ADMIN';
+  const isStaff = user?.role === 'ADMIN' || user?.role === 'MODERATOR';
 
   const [regionName, setRegionName] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -180,7 +180,7 @@ export default function AdminLocationsPage() {
   const regionsQuery = useQuery({
     queryKey: ['admin-regions'],
     queryFn: () => get<{ data: { regions: RegionDto[] } }>('/api/regions?all=1'),
-    enabled: isAdmin,
+    enabled: isStaff,
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-regions'] });
@@ -221,7 +221,7 @@ export default function AdminLocationsPage() {
     onError,
   });
 
-  if (!isAdmin) {
+  if (!isStaff) {
     return (
       <div>
         <Header />

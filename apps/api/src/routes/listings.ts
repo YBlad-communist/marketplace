@@ -264,9 +264,10 @@ router.patch(
 router.delete('/:id', authenticate, async (req, res, next) => {
   try {
     const { listing, isOwner } = await assertOwnerOrModerator(req.params.id, req.userId!, req.userRole!);
-    const isStaff = req.userRole === 'ADMIN' || req.userRole === 'MODERATOR';
-    if (!isOwner && !isStaff) {
-      throw new AppError(errorCodes.FORBIDDEN, 'Удалять может только владелец или модератор', 403);
+    // Удаление объявления разрешено только владельцу или администратору:
+    // модератор одобряет/отклоняет, но не удаляет.
+    if (!isOwner && req.userRole !== 'ADMIN') {
+      throw new AppError(errorCodes.FORBIDDEN, 'Удалять может только владелец или администратор', 403);
     }
     // Явная проверка до удаления: любой заказ (активный или закрытый) блочит
     // удаление объявления из-за RESTRICT-FK. Без неё Postgres отдал бы 23001
@@ -353,7 +354,11 @@ router.post(
 
 router.delete('/:id/images/:imageId', authenticate, async (req, res, next) => {
   try {
-    const { listing } = await assertOwnerOrModerator(req.params.id, req.userId!, req.userRole!);
+    const { listing, isOwner } = await assertOwnerOrModerator(req.params.id, req.userId!, req.userRole!);
+    // Удаление фото = удаление части объявления: только владелец или администратор.
+    if (!isOwner && req.userRole !== 'ADMIN') {
+      throw new AppError(errorCodes.FORBIDDEN, 'Удалять фото может только владелец или администратор', 403);
+    }
     const image = await prisma.listingImage.findUnique({ where: { id: req.params.imageId } });
     if (!image || image.listingId !== listing.id) {
       throw new AppError(errorCodes.NOT_FOUND, 'Фото не найдено', 404);

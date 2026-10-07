@@ -49,6 +49,15 @@ function UserIcon({ active }: { active: boolean }) {
   );
 }
 
+function ShieldIcon({ active }: { active: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={active ? 2.2 : 1.8} aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l7 3v5c0 4.4-2.9 8.4-7 10-4.1-1.6-7-5.6-7-10V6l7-3z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
+    </svg>
+  );
+}
+
 // DECISION: вместо дублирующего «Поиска» (поиск есть в шапке) — пункт «Чаты»:
 // иначе на мобильных до чатов вообще не добраться (иконка чата в шапке скрыта <sm).
 const items = [
@@ -58,6 +67,10 @@ const items = [
   { href: '/favorites', label: 'Избранное', Icon: HeartIcon, exact: false, anchor: false },
   { href: '/cabinet', label: 'Профиль', Icon: UserIcon, exact: false, anchor: false },
 ];
+
+// Вход в модерацию для стаффа: на мобильном шапка почти пустая, ссылка
+// в шапке видна только >= md — без пункта в баре попасть в /admin нельзя.
+const moderationItem = { href: '/admin', label: 'Модерация', Icon: ShieldIcon, exact: false, anchor: false };
 
 export function MobileNav() {
   const pathname = usePathname();
@@ -74,10 +87,12 @@ export function MobileNav() {
   );
   // DECISION: в открытом чате навигация скрыта — чат занимает весь экран.
   if (pathname.startsWith('/chat/')) return null;
+  const isStaff = user?.role === 'ADMIN' || user?.role === 'MODERATOR';
+  const navItems = isStaff ? [...items, moderationItem] : items;
   return (
     <nav aria-label="Мобильная навигация" className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] md:hidden">
-      <div className="grid grid-cols-5">
-        {items.map(({ href, label, Icon, exact, anchor }) => {
+      <div className={cn('grid', isStaff ? 'grid-cols-6' : 'grid-cols-5')}>
+        {navItems.map(({ href, label, Icon, exact, anchor }) => {
           const active = !anchor && (exact ? pathname === href : pathname.startsWith(href));
           const badge = href === '/chat' ? totalUnread : 0;
           return (

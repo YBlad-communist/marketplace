@@ -3,6 +3,7 @@ import { prisma, Prisma } from '@marketplace/db';
 import {
   adminModerationSchema,
   adminBanSchema,
+  adminRoleSchema,
   categoryCreateSchema,
   categoryUpdateSchema,
   regionCreateSchema,
@@ -16,6 +17,7 @@ import {
 import { validate } from '../middleware/validate.js';
 import { authenticate, requireModerator, requireAdmin } from '../middleware/auth.js';
 import { approveListing, rejectListing } from '../services/moderationService.js';
+import { deleteAccountByAdmin } from '../services/accountService.js';
 import { logSecurityEvent } from '../lib/logger.js';
 import { getRedis } from '../lib/redis.js';
 
@@ -88,7 +90,9 @@ router.post('/reports/:id/resolve', async (req, res, next) => {
   }
 });
 
-router.use(requireAdmin);
+// Всё ниже (категории, локации, список/бан пользователей) доступно и
+// модераторам, и админам — модератор = админ без удаления объявлений и
+// пользователей. Админские операции отделены requireAdmin внизу файла.
 
 /** P2002 (unique) → читаемый 409 вместо 500. */
 function handleUnique(err: unknown, entity: string): void {
@@ -373,6 +377,55 @@ router.get('/users', async (req, res, next) => {
       },
     });
     res.json({ data: { users } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Только администратор ----------
+
+router.use(requireAdmin);
+
+router.patch('/users/:id/role', validate(adminRoleSchema), async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!user) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
+    if (user.id === req.userId) {
+      throw new AppError(errorCodes.FORBIDDEN, 'Нельзя изменить собственную роль', 403);
+    }
+    if (user.role === req.body.role) {
+      res.json({ data: { success: true, role: user.role } });
+      return;
+    }
+    await prisma.user.update({ where: { id: user.id }, data: { role: req.body.role } });
+    // Без инвалидации кэша новая роль «приедет» только через TTL (30с).
+    await getRedis().del(`user:auth:${user.id}`);
+    logSecurityEvent('user_role_changed', {
+      userId: user.id,
+      from: user.role,
+      to: req.body.role,
+      admin: req.userId,
+    });
+    res.json({ data: { success: true, role: req.body.role } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/users/:id', async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!user) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
+    if (user.id === req.userId) {
+      throw new AppError(errorCodes.FORBIDDEN, 'Нельзя удалить собственный аккаунт через админку', 403);
+    }
+    if (user.role === 'ADMIN') {
+      throw new AppError(errorCodes.FORBIDDEN, 'Нельзя удалить администратора', 403);
+    }
+    // Ядро удаления общее с самоудалением: активные заказы → 409,
+    // иначе полный каскад (объявления, чаты, отзывы, заказы, файлы в S3).
+    await deleteAccountByAdmin(user.id, req.userId!);
+    res.json({ data: { success: true } });
   } catch (err) {
     next(err);
   }

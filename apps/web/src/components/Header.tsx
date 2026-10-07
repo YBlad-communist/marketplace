@@ -223,7 +223,7 @@ export function Header() {
                 <UserIcon />
               </IconLink>
               {(user.role === 'ADMIN' || user.role === 'MODERATOR') && (
-                <Link href="/admin" className="hidden rounded-lg px-2 py-1 text-xs text-textSecondary hover:text-textPrimary lg:block">
+                <Link href="/admin" className="hidden rounded-lg px-2 py-1 text-xs text-textSecondary hover:text-textPrimary md:block">
                   Модерация
                 </Link>
               )}

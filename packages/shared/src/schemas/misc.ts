@@ -50,6 +50,12 @@ export const adminBanSchema = z.object({
   reason: z.string().trim().max(1000).optional(),
 });
 
+export const adminRoleSchema = z.object({
+  // userId дублируется в URL (:id) и body. Смена роли — только для админа.
+  userId: z.string().cuid().optional(),
+  role: z.enum(['USER', 'MODERATOR', 'ADMIN']),
+});
+
 export const reviewQuerySchema = z.object({
   userId: z.string().cuid(),
   cursor: z.string().optional(),

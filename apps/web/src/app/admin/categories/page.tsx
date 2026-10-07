@@ -166,7 +166,7 @@ function CategoryRow({
 export default function AdminCategoriesPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
-  const isAdmin = user?.role === 'ADMIN';
+  const isStaff = user?.role === 'ADMIN' || user?.role === 'MODERATOR';
 
   const [rootName, setRootName] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -177,7 +177,7 @@ export default function AdminCategoriesPage() {
   const categoriesQuery = useQuery({
     queryKey: ['admin-categories'],
     queryFn: () => get<{ data: { categories: AdminCategory[] } }>('/api/categories?all=1'),
-    enabled: isAdmin,
+    enabled: isStaff,
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin-categories'] });
@@ -200,7 +200,7 @@ export default function AdminCategoriesPage() {
     onError: (err) => setError(errMsg(err)),
   });
 
-  if (!isAdmin) {
+  if (!isStaff) {
     return (
       <div>
         <Header />

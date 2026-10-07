@@ -10,22 +10,16 @@ import { enqueueS3Delete } from './notificationService.js';
 const LOCKED_ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'REFUNDING', 'DISPUTED'] as const;
 
 /**
- * Полное физическое удаление аккаунта. Порядок важен из-за Restrict-связей:
- * сначала всё, что ссылается на пользователя/его сущности, потом сами сущности.
- * Активные заказы (покупатель или продавец) блокируют удаление — 409.
- * Возвращает S3-ключи для фонового удаления (аватар, фото объявлений, фото чатов).
+ * Ядро удаления аккаунта (без проверки пароля): блокировка при активных
+ * заказах, сбор S3-ключей, транзакция, фоновая чистка файлов и auth-кэша.
+ * Порядок важен из-за Restrict-связей: сначала всё, что ссылается на
+ * пользователя/его сущности, потом сами сущности.
  */
-export async function deleteAccount(userId: string, password: string): Promise<void> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
-  if (!user.passwordHash) {
-    throw new AppError(errorCodes.CONFLICT, 'Для аккаунта не задан пароль, обратитесь в поддержку', 409);
-  }
-  const ok = await argon2.verify(user.passwordHash, password);
-  if (!ok) {
-    logSecurityEvent('failed_account_delete', { userId });
-    throw new AppError(errorCodes.UNAUTHORIZED, 'Неверный пароль', 401);
-  }
+async function performAccountDeletion(user: {
+  id: string;
+  avatarUrl: string | null;
+}): Promise<void> {
+  const userId = user.id;
 
   // Блокировка при активных заказах — и как покупателя, и как продавца.
   const activeBuyer = await prisma.order.findFirst({
@@ -115,5 +109,33 @@ export async function deleteAccount(userId: string, password: string): Promise<v
   // Остальные сессии умирают сами: loadUser вернёт null. Auth-кэш чистим сразу.
   const redis = getRedis();
   await redis.del(`user:auth:${userId}`).catch(() => undefined);
+}
+
+/**
+ * Самоудаление аккаунта: подтверждение паролем обязательно.
+ * Активные заказы (покупатель или продавец) блокируют удаление — 409.
+ */
+export async function deleteAccount(userId: string, password: string): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
+  if (!user.passwordHash) {
+    throw new AppError(errorCodes.CONFLICT, 'Для аккаунта не задан пароль, обратитесь в поддержку', 409);
+  }
+  const ok = await argon2.verify(user.passwordHash, password);
+  if (!ok) {
+    logSecurityEvent('failed_account_delete', { userId });
+    throw new AppError(errorCodes.UNAUTHORIZED, 'Неверный пароль', 401);
+  }
+
+  await performAccountDeletion(user);
   logSecurityEvent('account_deleted', { userId });
+}
+
+/** Полное удаление аккаунта администратором (без пароля пользователя). */
+export async function deleteAccountByAdmin(targetId: string, actorId: string): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { id: targetId } });
+  if (!user) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
+
+  await performAccountDeletion(user);
+  logSecurityEvent('account_deleted_by_admin', { userId: targetId, admin: actorId });
 }
