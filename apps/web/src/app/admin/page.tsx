@@ -42,7 +42,29 @@ interface AdminUser {
   createdAt: string;
 }
 
-type Tab = 'listings' | 'reports' | 'users';
+interface AdminDispute {
+  id: string;
+  reason: string;
+  comment: string | null;
+  photos: string[];
+  status: string;
+  createdAt: string;
+  openedBy: { id: string; name: string } | null;
+  order: {
+    id: string;
+    status: string;
+    amount: number;
+    currency: string;
+    createdAt: string;
+    holdExpiresAt: string | null;
+    shippedAt: string | null;
+    trackingNumber: string | null;
+    listing: { id: string; title: string; sellerId: string };
+    buyer: { id: string; name: string };
+  };
+}
+
+type Tab = 'listings' | 'reports' | 'users' | 'disputes';
 
 export default function AdminPage() {
   const queryClient = useQueryClient();
@@ -69,6 +91,12 @@ export default function AdminPage() {
     queryKey: ['admin-users'],
     queryFn: () => get<{ data: { users: AdminUser[] } }>('/api/admin/users'),
     enabled: isStaff && tab === 'users',
+  });
+
+  const disputesQuery = useQuery({
+    queryKey: ['admin-disputes'],
+    queryFn: () => get<{ data: { disputes: AdminDispute[] } }>('/api/admin/disputes'),
+    enabled: isStaff && tab === 'disputes',
   });
 
   const moderate = useMutation({
@@ -110,6 +138,25 @@ export default function AdminPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-pending'] }),
   });
 
+  // Решение спора: комментарий обязателен (его увидят обе стороны).
+  const resolveDispute = useMutation({
+    mutationFn: ({ orderId, decision, comment }: { orderId: string; decision: 'SELLER' | 'BUYER'; comment: string }) =>
+      post(`/api/admin/disputes/${orderId}/resolve`, { decision, comment }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-disputes'] }),
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Не удалось решить спор'),
+  });
+
+  const decideDispute = (orderId: string, decision: 'SELLER' | 'BUYER', label: string) => {
+    const comment = window.prompt(`Комментарий к решению (обязательно, увидят обе стороны): ${label}`);
+    if (comment === null) return;
+    if (comment.trim().length < 3) {
+      setActionError('Комментарий к решению — минимум 3 символа');
+      return;
+    }
+    setActionError(null);
+    resolveDispute.mutate({ orderId, decision, comment: comment.trim() });
+  };
+
   if (!isStaff) {
     return (
       <div>
@@ -122,6 +169,7 @@ export default function AdminPage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: 'listings', label: 'На модерацию' },
     { id: 'reports', label: 'Жалобы' },
+    { id: 'disputes', label: 'Споры' },
     { id: 'users', label: 'Пользователи' },
   ];
 
@@ -241,6 +289,67 @@ export default function AdminPage() {
             ))}
             {!reportsQuery.isLoading && (reportsQuery.data?.data.reports ?? []).length === 0 && (
               <div className="text-sm text-textSecondary">Нет новых жалоб</div>
+            )}
+          </div>
+        )}
+
+        {tab === 'disputes' && (
+          <div className="space-y-3">
+            {(disputesQuery.data?.data.disputes ?? []).map((d) => (
+              <div key={d.id} className="card p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">
+                      Спор по заказу:{' '}
+                      <Link href={`/orders/${d.order.id}`} className="hover:text-accent hover:underline">
+                        {d.order.listing.title}
+                      </Link>
+                    </div>
+                    <div className="text-sm text-textSecondary">
+                      Покупатель: {d.order.buyer.name} ·{' '}
+                      <Link href={`/users/${d.order.listing.sellerId}`} className="hover:text-accent hover:underline">
+                        Профиль продавца
+                      </Link>{' '}
+                      · {formatPrice(d.order.amount, d.order.currency)}
+                    </div>
+                    <div className="mt-1 text-sm">Причина: {d.reason}</div>
+                    {d.comment && <div className="text-sm text-textSecondary">Комментарий: {d.comment}</div>}
+                    <div className="mt-1 text-xs text-textMuted">
+                      Открыт {formatDateTime(d.createdAt)}
+                      {d.openedBy ? ` · ${d.openedBy.name}` : ''}
+                      {d.order.shippedAt ? ` · отправлен ${formatDateTime(d.order.shippedAt)}` : ''}
+                      {d.order.trackingNumber ? ` · трек ${d.order.trackingNumber}` : ''}
+                    </div>
+                    {d.photos.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {d.photos.map((url) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img key={url} src={url} alt="" className="h-20 w-20 rounded object-cover" />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="btn-primary text-xs"
+                      disabled={resolveDispute.isPending}
+                      onClick={() => decideDispute(d.id, 'SELLER', 'выплата продавцу')}
+                    >
+                      Выплатить продавцу
+                    </button>
+                    <button
+                      className="btn-danger text-xs"
+                      disabled={resolveDispute.isPending}
+                      onClick={() => decideDispute(d.id, 'BUYER', 'возврат покупателю')}
+                    >
+                      Вернуть покупателю
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!disputesQuery.isLoading && (disputesQuery.data?.data.disputes ?? []).length === 0 && (
+              <div className="text-sm text-textSecondary">Нет открытых споров</div>
             )}
           </div>
         )}

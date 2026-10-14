@@ -1,5 +1,7 @@
 # РынокRU — доска объявлений (Avito-like)
 
+[![CI](https://github.com/YBlad-communist/marketplace/actions/workflows/ci.yml/badge.svg)](https://github.com/YBlad-communist/marketplace/actions/workflows/ci.yml)
+
 ## Деплой на VPS (Ubuntu 24.04)
 
 ### Требования
@@ -155,6 +157,18 @@ pnpm test                   # vitest по всем пакетам; интегр�
 pnpm --filter @marketplace/web test:e2e  # playwright (нужен запущенный web)
 pnpm build                  # сборка всех пакетов (shared → db → api → web → worker)
 ```
+
+## CI (GitHub Actions)
+
+Workflow `.github/workflows/ci.yml` запускается на каждый push в `main` и на каждый pull request:
+
+1. `pnpm install --frozen-lockfile` (pnpm 11, Node 20);
+2. `pnpm build` — сборка всех пакетов (ловит ошибки типов на этапе компиляции);
+3. `pnpm typecheck` и `pnpm lint`;
+4. `prisma migrate deploy` в тестовую БД;
+5. `pnpm test` — vitest по всем пакетам.
+
+Инфраструктура в workflow — сервисы `postgres:16` (база `marketplace_test`) и `redis:7`; MinIO и SMTP не поднимаются, поэтому S3-тесты worker'а автоматически пропускаются (`describe.skip`), а тесты почты не требуют живого сервера. ЮKassa мокается через подмену `fetch`, ключи не нужны. Локально то же самое: поднимите Postgres и Redis, задайте `DATABASE_URL` на `marketplace_test` и выполните `pnpm db:deploy && pnpm test`.
 
 ## Структура
 

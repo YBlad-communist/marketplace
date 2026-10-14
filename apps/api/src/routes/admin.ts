@@ -3,6 +3,7 @@ import { prisma, Prisma } from '@marketplace/db';
 import {
   adminModerationSchema,
   adminBanSchema,
+  adminDisputeResolveSchema,
   adminRoleSchema,
   categoryCreateSchema,
   categoryUpdateSchema,
@@ -17,9 +18,11 @@ import {
 import { validate } from '../middleware/validate.js';
 import { authenticate, requireModerator, requireAdmin } from '../middleware/auth.js';
 import { approveListing, rejectListing } from '../services/moderationService.js';
+import { resolveDispute } from '../services/paymentService.js';
 import { deleteAccountByAdmin } from '../services/accountService.js';
 import { logSecurityEvent } from '../lib/logger.js';
 import { getRedis } from '../lib/redis.js';
+import { env } from '../config.js';
 
 const router: Router = Router();
 
@@ -377,6 +380,58 @@ router.get('/users', async (req, res, next) => {
       },
     });
     res.json({ data: { users } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Споры (доступно модераторам и админам) ----------
+
+router.get('/disputes', async (req, res, next) => {
+  try {
+    const disputes = await prisma.dispute.findMany({
+      where: { status: 'OPEN' },
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+      include: {
+        order: {
+          select: {
+            id: true,
+            status: true,
+            amount: true,
+            currency: true,
+            createdAt: true,
+            holdExpiresAt: true,
+            shippedAt: true,
+            trackingNumber: true,
+            listing: { select: { id: true, title: true, sellerId: true } },
+            buyer: { select: { id: true, name: true } },
+          },
+        },
+        openedBy: { select: { id: true, name: true } },
+      },
+    });
+    res.json({
+      data: {
+        disputes: disputes.map((d) => ({
+          ...d,
+          photos: d.photos.map((k) => (k.startsWith('http') ? k : `${env.S3_PUBLIC_BASE_URL}/${k}`)),
+          order: { ...d.order, amount: Number(d.order.amount) },
+        })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/disputes/:orderId/resolve', validate(adminDisputeResolveSchema), async (req, res, next) => {
+  try {
+    await resolveDispute(req.params.orderId, req.userId!, req.userRole!, {
+      decision: req.body.decision,
+      comment: req.body.comment,
+    });
+    res.json({ data: { success: true } });
   } catch (err) {
     next(err);
   }

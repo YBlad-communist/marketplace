@@ -1,13 +1,14 @@
 import argon2 from 'argon2';
 import { prisma } from '@marketplace/db';
-import { AppError, errorCodes } from '@marketplace/shared';
+import { ACTIVE_ORDER_STATUSES, AppError, errorCodes } from '@marketplace/shared';
 import { getRedis } from '../lib/redis.js';
 import { logSecurityEvent } from '../lib/logger.js';
 import { env } from '../config.js';
 import { enqueueS3Delete } from './notificationService.js';
 
 /** Статусы заказов, блокирующие удаление аккаунта (те же, что блокируют удаление объявления). */
-const LOCKED_ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'REFUNDING', 'DISPUTED'] as const;
+/** Активные заказы, блокирующие удаление аккаунта (в т.ч. SHIPPED/спор). */
+const LOCKED_ORDER_STATUSES = ACTIVE_ORDER_STATUSES;
 
 /**
  * Ядро удаления аккаунта (без проверки пароля): блокировка при активных

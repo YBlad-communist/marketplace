@@ -14,6 +14,7 @@ import { cn, formatDateTime, formatPrice } from '@/lib/format';
 const STATUS_LABEL: Record<OrderDto['status'], string> = {
   PENDING: 'Ожидает оплаты',
   PAID: 'Оплачен (эскроу)',
+  SHIPPED: 'Отправлен',
   RELEASING: 'Выплата',
   RELEASED: 'Завершён',
   REFUNDING: 'Возврат',
@@ -26,12 +27,14 @@ function OrderRow({
   role,
   onRelease,
   onRefund,
+  onShip,
   onReviewed,
 }: {
   order: OrderDto;
   role: 'buyer' | 'seller';
   onRelease: (id: string) => void;
   onRefund: (id: string) => void;
+  onShip: (id: string) => void;
   onReviewed: () => void;
 }) {
   const [reviewing, setReviewing] = useState(false);
@@ -69,15 +72,15 @@ function OrderRow({
           order.status === 'RELEASED' && 'badge-green',
           order.status === 'REFUNDED' && 'badge-red',
           (order.status === 'PENDING' || order.status === 'RELEASING' || order.status === 'REFUNDING') && 'badge-gray',
-          (order.status === 'PAID' || order.status === 'DISPUTED') && 'badge-amber'
+          (order.status === 'PAID' || order.status === 'DISPUTED' || order.status === 'SHIPPED') && 'badge-amber'
         )}
       >
         {STATUS_LABEL[order.status]}
       </span>
       <div className="flex gap-2">
         {role === 'seller' && order.status === 'PAID' && (
-          <button className="btn-primary text-xs" onClick={() => onRelease(order.id)}>
-            Подтвердить передачу
+          <button className="btn-primary text-xs" onClick={() => onShip(order.id)}>
+            Отправил / передал
           </button>
         )}
         {role === 'buyer' && order.status === 'PENDING' && (
@@ -85,10 +88,20 @@ function OrderRow({
             Отменить заказ
           </button>
         )}
+        {role === 'buyer' && (order.status === 'PAID' || order.status === 'SHIPPED') && (
+          <button className="btn-primary text-xs" onClick={() => onRelease(order.id)}>
+            Подтвердить получение
+          </button>
+        )}
         {role === 'buyer' && order.status === 'PAID' && (
           <button className="btn-secondary text-xs" onClick={() => onRefund(order.id)}>
             Запросить возврат
           </button>
+        )}
+        {role === 'buyer' && order.status === 'SHIPPED' && (
+          <Link href={`/orders/${order.id}`} className="btn-secondary text-xs">
+            Открыть спор
+          </Link>
         )}
         {order.status === 'RELEASED' && !order.reviewedByMe && counterpartyId && !reviewing && (
           <button className="btn-secondary text-xs" onClick={() => setReviewing(true)}>
@@ -116,7 +129,14 @@ function OrderRow({
         <p className="basis-full text-xs text-textSecondary">
           {role === 'buyer'
             ? 'Деньги заблокированы на вашей карте и спишутся только после вашего подтверждения получения.'
-            : 'Деньги заблокированы у покупателя. Вы получите их, когда сделка будет подтверждена.'}
+            : 'Деньги заблокированы у покупателя. Отправьте товар и подтвердите отправку, чтобы покупатель мог принять сделку.'}
+        </p>
+      )}
+      {order.status === 'SHIPPED' && (
+        <p className="basis-full text-xs text-textSecondary">
+          {role === 'buyer'
+            ? 'Товар отправлен. Подтвердите получение после проверки — или откройте спор, если есть проблема.'
+            : 'Товар отправлен. Ожидайте подтверждения получения от покупателя — после него деньги перейдут вам.'}
         </p>
       )}
     </div>
@@ -135,7 +155,7 @@ export default function OrdersPage() {
   });
 
   const action = useMutation({
-    mutationFn: ({ id, type }: { id: string; type: 'release' | 'refund' }) =>
+    mutationFn: ({ id, type }: { id: string; type: 'release' | 'refund' | 'ship' }) =>
       post(`/api/orders/${id}/${type}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['orders'] }),
   });
@@ -178,8 +198,9 @@ export default function OrdersPage() {
               key={o.id}
               order={o}
               role="buyer"
-              onRelease={() => undefined}
+              onRelease={(id) => action.mutate({ id, type: 'release' })}
               onRefund={(id) => action.mutate({ id, type: 'refund' })}
+              onShip={() => undefined}
               onReviewed={() => queryClient.invalidateQueries({ queryKey: ['orders'] })}
             />
           ))}
@@ -196,8 +217,9 @@ export default function OrdersPage() {
               key={o.id}
               order={o}
               role="seller"
-              onRelease={(id) => action.mutate({ id, type: 'release' })}
+              onRelease={() => undefined}
               onRefund={() => undefined}
+              onShip={(id) => action.mutate({ id, type: 'ship' })}
               onReviewed={() => queryClient.invalidateQueries({ queryKey: ['orders'] })}
             />
           ))}

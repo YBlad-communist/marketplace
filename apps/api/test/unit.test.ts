@@ -9,8 +9,23 @@ describe('moderation service', () => {
   });
 
   it('rejects prohibited content', async () => {
-    const d = await moderateListingContent({ title: 'Спортивный инвентарь', description: 'Куплю наркотики недорого' });
+    const d = await moderateListingContent({ title: 'Продам оружие', description: 'Продаю мощное оружие для коллекции' });
     expect(d.approve).toBe(false);
+  });
+
+  it('approves «доставка»: ключевое слово «ставк» не ловится внутри слова', async () => {
+    const d = await moderateListingContent({
+      title: 'Кроссовки с доставкой',
+      description: 'Продаю кроссовки, возможна доставка по городу самовывозом.',
+    });
+    expect(d.approve).toBe(true);
+  });
+
+  it('still rejects words at the start of a word (ставки, наркотики)', async () => {
+    const bets = await moderateListingContent({ title: 'Ставки на спорт', description: 'Деловые ставки на матчи дня' });
+    expect(bets.approve).toBe(false);
+    const drugs = await moderateListingContent({ title: 'Продам', description: 'Разные наркотики оптом' });
+    expect(drugs.approve).toBe(false);
   });
 });
 

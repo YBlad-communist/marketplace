@@ -52,6 +52,15 @@ function CatalogIcon() {
   );
 }
 
+function ShieldIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className ?? 'h-6 w-6'} fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l7 3v5c0 4.4-2.9 8.4-7 10-4.1-1.6-7-5.6-7-10V6l7-3z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
+    </svg>
+  );
+}
+
 function IconLink({ href, label, active, badge, children }: { href: string; label: string; active: boolean; badge?: number; children: React.ReactNode }) {
   return (
     <Link
@@ -223,8 +232,16 @@ export function Header() {
                 <UserIcon />
               </IconLink>
               {(user.role === 'ADMIN' || user.role === 'MODERATOR') && (
-                <Link href="/admin" className="hidden rounded-lg px-2 py-1 text-xs text-textSecondary hover:text-textPrimary md:block">
-                  Модерация
+                <Link
+                  href="/admin"
+                  aria-label="Модерация"
+                  aria-current={isActive('/admin') ? 'page' : undefined}
+                  className={cn(
+                    'hidden rounded-lg px-2 py-1 transition-colors md:block',
+                    isActive('/admin') ? 'text-accent' : 'text-textSecondary hover:text-textPrimary'
+                  )}
+                >
+                  <ShieldIcon />
                 </Link>
               )}
               <button

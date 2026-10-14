@@ -36,6 +36,7 @@ export const MAINTENANCE_JOBS = {
   CLEANUP_TOKENS: 'cleanup-tokens',
   CLEANUP_EXPIRED: 'cleanup-expired',
   CHECK_EXPIRED_HOLDS: 'check-expired-holds',
+  CHECK_HOLD_WARNINGS: 'check-hold-warnings',
   RECOVER_RELEASING: 'recover-stuck-releasing',
   SEND_OFFLINE_DIGEST: 'send-offline-digest',
   CLEANUP_ORPHANED_UPLOADS: 'cleanup-orphaned-uploads',

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/Header';
@@ -9,7 +9,7 @@ import { ListingCard } from '@/components/ListingCard';
 import { CardSkeleton, EmptyState, Pagination } from '@/components/ui/primitives';
 import { get } from '@/lib/api';
 import { CategoryDto, CursorPage, ListingDto, RegionDto } from '@/lib/types';
-import { cn } from '@/lib/format';
+import { cn, plural } from '@/lib/format';
 
 function SortChips({ sort, onSort }: { sort: string; onSort: (id: string) => void }) {
   return (
@@ -38,9 +38,59 @@ function SortChips({ sort, onSort }: { sort: string; onSort: (id: string) => voi
   );
 }
 
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Все фильтры живут в URL (?q=&cat=&region=&city=&cityName=&min=&max=&condition=&handover=&sort=). */
+interface Filters {
+  q: string;
+  category: string;
+  regionId: string;
+  cityId: string;
+  city: string;
+  minPrice: string;
+  maxPrice: string;
+  condition: string;
+  handover: string;
+}
+
+const EMPTY_FILTERS: Filters = {
+  q: '',
+  category: '',
+  regionId: '',
+  cityId: '',
+  city: '',
+  minPrice: '',
+  maxPrice: '',
+  condition: '',
+  handover: '',
+};
+
+function filtersToParams(f: Filters, sort: string): URLSearchParams {
+  const params = new URLSearchParams();
+  if (f.q) params.set('q', f.q);
+  if (f.category) params.set('cat', f.category);
+  if (f.regionId) params.set('region', f.regionId);
+  if (f.cityId) params.set('city', f.cityId);
+  if (f.city) params.set('cityName', f.city);
+  if (f.minPrice) params.set('min', f.minPrice);
+  if (f.maxPrice) params.set('max', f.maxPrice);
+  if (f.condition) params.set('condition', f.condition);
+  if (f.handover) params.set('handover', f.handover);
+  if (sort !== 'date_desc') params.set('sort', sort);
+  return params;
+}
+
 function HomeContent() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [q, setQ] = useState('');
   const [category, setCategory] = useState('');
@@ -49,37 +99,91 @@ function HomeContent() {
   const [cityId, setCityId] = useState('');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
+  const [condition, setCondition] = useState('');
+  const [handover, setHandover] = useState('');
   const [sort, setSort] = useState('date_desc');
 
-  const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
+  const [appliedFilters, setAppliedFilters] = useState<Filters>(EMPTY_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // DECISION: шапка и плитки категорий ведут на /?q=../?cat=.. — синхронизируем
-  // их со state один раз на изменение URL, логика запросов не меняется.
-  // Плюс иерархические фильтры: ?region=<id>&city=<cityId>.
+  // URL → state: один раз на изменение строки запроса. Свои коммиты помечаем
+  // флагом, чтобы debounce-ввод не перетирался более старым значением из URL.
   const syncedUrl = useRef('');
+  const selfCommit = useRef(false);
   useEffect(() => {
     const key = searchParams.toString();
     if (key === syncedUrl.current) return;
     syncedUrl.current = key;
+    const external = !selfCommit.current;
+    selfCommit.current = false;
+
     const qParam = searchParams.get('q') ?? '';
     const catParam = searchParams.get('cat') ?? searchParams.get('category') ?? '';
     const regionParam = searchParams.get('region') ?? '';
     const cityParam = searchParams.get('city') ?? '';
-    setQ(qParam);
-    setCategory(catParam);
-    setRegionId(regionParam);
-    setCityId(cityParam);
-    setAppliedFilters({
+    const cityNameParam = searchParams.get('cityName') ?? '';
+    const minParam = searchParams.get('min') ?? '';
+    const maxParam = searchParams.get('max') ?? '';
+    const conditionParam = searchParams.get('condition') ?? '';
+    const handoverParam = searchParams.get('handover') ?? '';
+    const sortParam = searchParams.get('sort') ?? 'date_desc';
+
+    const next: Filters = {
       q: qParam.trim(),
       category: catParam,
       regionId: regionParam,
       cityId: cityParam,
-      city: '',
-      minPrice: '',
-      maxPrice: '',
-    });
+      city: cityNameParam,
+      minPrice: minParam,
+      maxPrice: maxParam,
+      condition: conditionParam,
+      handover: handoverParam,
+    };
+    setAppliedFilters(next);
+    if (external) {
+      setQ(qParam);
+      setCategory(catParam);
+      setRegionId(regionParam);
+      setCityId(cityParam);
+      setCity(cityNameParam);
+      setMinPrice(minParam);
+      setMaxPrice(maxParam);
+      setCondition(conditionParam);
+      setHandover(handoverParam);
+      setSort(sortParam);
+    }
   }, [searchParams]);
+
+  /** Единая точка коммита: применяем фильтры и записываем их в URL. */
+  const commit = (next: Filters, nextSort: string = sort) => {
+    setAppliedFilters(next);
+    const qs = filtersToParams(next, nextSort).toString();
+    if (qs === syncedUrl.current) return;
+    selfCommit.current = true;
+    router.replace(qs ? `/?${qs}` : '/');
+  };
+
+  // Debounce для свободного ввода (поиск/цены/город): 450 мс тишины → в URL.
+  useEffect(() => {
+    const draft: Filters = {
+      ...appliedFilters,
+      q: q.trim(),
+      minPrice: minPrice.trim(),
+      maxPrice: maxPrice.trim(),
+      city: appliedFilters.cityId ? '' : city.trim(),
+    };
+    if (
+      draft.q === appliedFilters.q &&
+      draft.minPrice === appliedFilters.minPrice &&
+      draft.maxPrice === appliedFilters.maxPrice &&
+      draft.city === appliedFilters.city
+    ) {
+      return;
+    }
+    const timer = setTimeout(() => commit(draft), 450);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, minPrice, maxPrice, city]);
 
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
@@ -94,7 +198,7 @@ function HomeContent() {
     staleTime: 5 * 60_000,
   });
   const regions = regionsQuery.data?.data.regions ?? [];
-  const selectedRegion = regions.find((r) => r.id === regionId);
+  const selectedRegion = regions.find((r) => r.id === appliedFilters.regionId);
 
   const listingsQuery = useQuery({
     queryKey: ['listings', appliedFilters, sort],
@@ -107,60 +211,60 @@ function HomeContent() {
       if (appliedFilters.city) params.set('city', appliedFilters.city);
       if (appliedFilters.minPrice) params.set('minPrice', appliedFilters.minPrice);
       if (appliedFilters.maxPrice) params.set('maxPrice', appliedFilters.maxPrice);
+      if (appliedFilters.condition) params.set('condition', appliedFilters.condition);
+      if (appliedFilters.handover) params.set('handover', appliedFilters.handover);
       return get<{ data: CursorPage<ListingDto> }>(`/api/listings?${params.toString()}`);
     },
   });
 
-  const apply = (next?: { q?: string; category?: string }) => {
-    setAppliedFilters({
-      q: (next?.q ?? q).trim(),
-      category: next?.category ?? category,
+  const apply = () => {
+    commit({
+      q: q.trim(),
+      category,
       regionId,
       cityId,
       city: regions.length > 0 ? '' : city.trim(),
       minPrice: minPrice.trim(),
       maxPrice: maxPrice.trim(),
+      condition,
+      handover,
     });
   };
 
   const pickCategory = (id: string) => {
     setCategory(id);
-    setAppliedFilters({
-      q: q.trim(),
-      category: id,
-      regionId,
-      cityId,
-      city: regions.length > 0 ? '' : city.trim(),
-      minPrice: minPrice.trim(),
-      maxPrice: maxPrice.trim(),
-    });
+    commit({ ...appliedFilters, q: q.trim(), category: id });
   };
 
   const pickRegion = (id: string) => {
     setRegionId(id);
     setCityId('');
-    setAppliedFilters({
-      q: q.trim(),
-      category,
-      regionId: id,
-      cityId: '',
-      city: '',
-      minPrice: minPrice.trim(),
-      maxPrice: maxPrice.trim(),
-    });
+    commit({ ...appliedFilters, regionId: id, cityId: '', city: '' });
   };
 
   const pickCity = (id: string) => {
     setCityId(id);
-    setAppliedFilters({
-      q: q.trim(),
-      category,
-      regionId,
-      cityId: id,
-      city: '',
-      minPrice: minPrice.trim(),
-      maxPrice: maxPrice.trim(),
-    });
+    commit({ ...appliedFilters, cityId: id, city: '' });
+  };
+
+  const pickCondition = (value: string) => {
+    setCondition(value);
+    commit({ ...appliedFilters, condition: value });
+  };
+
+  const pickHandover = (value: string) => {
+    setHandover(value);
+    commit({ ...appliedFilters, handover: value });
+  };
+
+  const clearSearch = () => {
+    setQ('');
+    commit({ ...appliedFilters, q: '' });
+  };
+
+  const changeSort = (id: string) => {
+    setSort(id);
+    commit(appliedFilters, id);
   };
 
   const loadMore = async () => {
@@ -174,6 +278,8 @@ function HomeContent() {
     if (appliedFilters.city) params.set('city', appliedFilters.city);
     if (appliedFilters.minPrice) params.set('minPrice', appliedFilters.minPrice);
     if (appliedFilters.maxPrice) params.set('maxPrice', appliedFilters.maxPrice);
+    if (appliedFilters.condition) params.set('condition', appliedFilters.condition);
+    if (appliedFilters.handover) params.set('handover', appliedFilters.handover);
     const page = await get<{ data: CursorPage<ListingDto> }>(`/api/listings?${params.toString()}`);
     queryClient.setQueryData<{ data: CursorPage<ListingDto> }>(['listings', appliedFilters, sort], (old) => ({
       data: old
@@ -194,9 +300,15 @@ function HomeContent() {
         <section className="overflow-hidden rounded-2xl bg-gradient-to-r from-accentActive via-accent to-accentHover text-white shadow-card">
           <div className="flex flex-col gap-4 p-6 sm:p-10 lg:flex-row lg:items-center lg:justify-between">
             <div className="max-w-xl">
+              <span className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium">
+                <LockIcon />
+                Безопасная сделка — эскроу
+              </span>
               <h1 className="text-2xl font-bold leading-heading sm:text-3xl">Покупайте и продавайте рядом с вами</h1>
               <p className="mt-2 text-sm leading-body text-white/90 sm:text-base">
-                {typeof total === 'number' ? `Сейчас на площадке: ${total}` : 'Свежие предложения со всей площадки'} — безопасные сделки с эскроу.
+                {typeof total === 'number'
+                  ? `Сейчас на площадке: ${total} ${plural(total, ['объявление', 'объявления', 'объявлений'])} — безопасные сделки с эскроу.`
+                  : 'Свежие предложения со всей площадки — безопасные сделки с эскроу.'}
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
@@ -253,22 +365,56 @@ function HomeContent() {
           </section>
         )}
 
-        {/* Поиск и фильтры */}
-        <section id="search" aria-label="Поиск и фильтры" className="card mt-6 scroll-mt-24 p-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="md:col-span-2">
-              <label className="sr-only" htmlFor="home-search">
-                Поиск по объявлениям
-              </label>
-              <input
-                id="home-search"
-                className="input"
-                placeholder="Поиск: смартфон, квартира…"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && apply()}
-              />
+        {/* Как работает — 3 шага */}
+        <section aria-label="Как работает безопасная сделка" className="mt-8">
+          <h2 className="section-title text-xl">Как работает безопасная сделка</h2>
+          <ol className="mt-4 grid gap-4 sm:grid-cols-3">
+            {[
+              {
+                n: '1',
+                title: 'Покупатель платит в эскроу',
+                text: 'Деньги списываются с карты, но удерживаются площадкой — продавец их пока не получает.',
+              },
+              {
+                n: '2',
+                title: 'Продавец отдаёт товар',
+                text: 'Самовывозом или доставкой — как договорились. Передачу он подтверждает на странице заказа.',
+              },
+              {
+                n: '3',
+                title: 'Покупатель подтверждает получение',
+                text: 'Деньги сразу уходят продавцу. Если есть проблема — открывается спор, и решение принимает модератор.',
+              },
+            ].map((step) => (
+              <li key={step.n} className="card p-4">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accentSoft text-sm font-bold text-accentHover">
+                  {step.n}
+                </span>
+                <h3 className="mt-3 font-semibold">{step.title}</h3>
+                <p className="mt-1 text-sm leading-body text-textSecondary">{step.text}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {/* Фильтры (поиск — в шапке, здесь только фильтры; состояние в URL) */}
+        <section id="search" aria-label="Фильтры" className="card mt-6 scroll-mt-24 p-4">
+          {appliedFilters.q && (
+            <div className="mb-3 flex items-center gap-2 text-sm">
+              <span className="text-textSecondary">
+                Поиск: <span className="font-medium text-textPrimary">«{appliedFilters.q}»</span>
+              </span>
+              <button
+                type="button"
+                onClick={clearSearch}
+                aria-label="Сбросить поиск"
+                className="rounded-full bg-surfaceMuted px-2 text-xs text-textSecondary hover:text-danger"
+              >
+                ✕
+              </button>
             </div>
+          )}
+          <div className="grid gap-3 md:grid-cols-3">
             <div>
               <label className="sr-only" htmlFor="home-category">
                 Категория
@@ -277,10 +423,7 @@ function HomeContent() {
                 id="home-category"
                 className="input"
                 value={category}
-                onChange={(e) => {
-                  setCategory(e.target.value);
-                  apply({ category: e.target.value });
-                }}
+                onChange={(e) => pickCategory(e.target.value)}
               >
                 <option value="">Все категории</option>
                 {categories.flatMap((c) => [
@@ -298,6 +441,36 @@ function HomeContent() {
                     )),
                   ]),
                 ])}
+              </select>
+            </div>
+            <div>
+              <label className="sr-only" htmlFor="home-condition">
+                Состояние
+              </label>
+              <select
+                id="home-condition"
+                className="input"
+                value={condition}
+                onChange={(e) => pickCondition(e.target.value)}
+              >
+                <option value="">Любое состояние</option>
+                <option value="NEW">Новый</option>
+                <option value="USED">Б/у</option>
+              </select>
+            </div>
+            <div>
+              <label className="sr-only" htmlFor="home-handover">
+                Способ получения
+              </label>
+              <select
+                id="home-handover"
+                className="input"
+                value={handover}
+                onChange={(e) => pickHandover(e.target.value)}
+              >
+                <option value="">Любой способ получения</option>
+                <option value="PICKUP">Самовывоз</option>
+                <option value="DELIVERY">Доставка</option>
               </select>
             </div>
           </div>
@@ -402,8 +575,8 @@ function HomeContent() {
           )}
 
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <SortChips sort={sort} onSort={setSort} />
-            <button type="button" className="btn-primary" onClick={() => apply()}>
+            <SortChips sort={sort} onSort={changeSort} />
+            <button type="button" className="btn-primary" onClick={apply}>
               Применить
             </button>
           </div>

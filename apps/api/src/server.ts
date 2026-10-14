@@ -6,7 +6,7 @@ import { connectRedis, disconnectRedis } from './lib/redis.js';
 import { initSocket } from './lib/socket.js';
 import { logger } from './lib/logger.js';
 import { closeQueues } from './queues/index.js';
-import { enqueueTokenCleanup, enqueueExpiredHoldsCheck, enqueueReleasingRecovery, enqueueOrphanedUploadsCleanup } from './services/notificationService.js';
+import { enqueueTokenCleanup, enqueueExpiredHoldsCheck, enqueueHoldWarningsCheck, enqueueReleasingRecovery, enqueueOrphanedUploadsCleanup } from './services/notificationService.js';
 import { scheduleCriticalJob } from './services/jobScheduler.js';
 
 async function main() {
@@ -27,6 +27,7 @@ async function main() {
   // чистка холдов / recovery выплат не запланируется без единой строчки.
   await scheduleCriticalJob('enqueueTokenCleanup', () => enqueueTokenCleanup());
   await scheduleCriticalJob('enqueueExpiredHoldsCheck', () => enqueueExpiredHoldsCheck());
+  await scheduleCriticalJob('enqueueHoldWarningsCheck', () => enqueueHoldWarningsCheck());
   await scheduleCriticalJob('enqueueReleasingRecovery', () => enqueueReleasingRecovery());
   await scheduleCriticalJob('enqueueOrphanedUploadsCleanup', () => enqueueOrphanedUploadsCleanup());
 

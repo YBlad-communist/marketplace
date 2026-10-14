@@ -6,6 +6,7 @@ import {
   listingUpdateSchema,
   imagePresignSchema,
   createImagesDoneSchema,
+  ACTIVE_ORDER_STATUSES,
   AppError,
   errorCodes,
 } from '@marketplace/shared';
@@ -27,7 +28,8 @@ import { logSecurityEvent } from '../lib/logger.js';
 const router: Router = Router();
 
 /** Заказы, из-за которых объявление нельзя редактировать/удалять */
-const LOCKED_ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'REFUNDING', 'DISPUTED'] as const;
+/** Заказы, из-за которых объявление заморожено (правка/удаление запрещены). */
+const LOCKED_ORDER_STATUSES = ACTIVE_ORDER_STATUSES;
 
 async function assertNoActiveOrder(listingId: string, action: string): Promise<void> {
   const active = await prisma.order.findFirst({
@@ -159,6 +161,8 @@ router.post(
           address: input.address || null,
           lat: input.lat,
           lng: input.lng,
+          condition: input.condition ?? null,
+          handover: input.handover ?? null,
           attributes: input.attributes ?? {},
           moderationNote: moderation.approve ? null : moderation.reason,
         },

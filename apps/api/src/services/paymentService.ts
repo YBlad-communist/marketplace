@@ -1,36 +1,66 @@
 import { Order, prisma } from '@marketplace/db';
-import { AppError, errorCodes } from '@marketplace/shared';
-import { env } from '../config.js';
+import {
+  ACTIVE_ORDER_STATUSES,
+  AppError,
+  errorCodes,
+  type PaymentProvider,
+} from '@marketplace/shared';
+import { env, platformFeeBasisPoints, holdTtlDays } from '../config.js';
 import { getRedis } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
+import { buildAssistantPayUrl, monetaAmount } from '../lib/moneta.js';
 import { enqueueEmail } from './notificationService.js';
+import { getPaymentProvider } from './payments/index.js';
 import {
   cancelKeyFor,
-  cancelYookassaPayment,
   captureKeyFor,
-  captureYookassaPayment,
-  createYookassaPayment,
-  getYookassaPayment,
-  isTrustedYookassaIp,
   refundCancelKeyFor,
   refundKeyFor,
-  refundYookassaPayment,
-  toAmount,
-  type YooPayment,
 } from '../lib/yookassa.js';
 
 /**
- * ЭСКРОУ-ПАТТЕРН на ЮKassa (split payments, двухстадийные платежи).
- * 1. Покупатель платит через виджет -> деньги авторизованы и УДЕРЖАНЫ (pending -> waiting_for_capture).
- * 2. Покупатель подтверждает получение -> capture: деньги попадают продавцу по transfers,
- *    комиссия платформы удерживается через platform_fee_amount.
- * 3. Возврат -> cancel холда (waiting_for_capture) или refund после capture (succeeded).
- * Никаких отдельных сущностей «перевода» не требуется: распределение задано в transfers
- * при создании платежа, capture раскладывает сумму автоматически.
+ * ЭСКРОУ-ПАТТЕРН («безопасная сделка») за интерфейсом PaymentProvider.
+ * 1. Покупатель оплачивает -> средства авторизованы и УДЕРЖАНЫ (холд).
+ * 2. Покупатель подтверждает получение -> confirm (capture): средства
+ *    распределяются между продавцом и комиссией платформы.
+ * 3. Возврат -> cancel холда (до capture) или refund (после capture).
+ * Провайдер (ЮKassa/Монета/mock) выбирается по env PAYMENT_PROVIDER;
+ * здесь остаётся только бизнес-стейт-машина заказов.
  */
 
 export function platformFeeForAmount(amount: number): number {
-  return Number(((amount * env.YOOKASSA_PLATFORM_FEE_BASIS_POINTS) / 10000).toFixed(2));
+  return Number(((amount * platformFeeBasisPoints) / 10000).toFixed(2));
+}
+
+/** Сумма заказа в копейках (граница провайдера — целые копейки). */
+function toKopecks(amount: unknown): number {
+  return Math.round(Number(amount) * 100);
+}
+
+/**
+ * Реквизит продавца у провайдера. payoutAccountId — провайдер-нейтральное
+ * поле; yookassaShopId — legacy-фолбэк на время переезда (тесты и старые
+ * записи заполняют только legacy-поля).
+ */
+function sellerAccountRef(seller: {
+  payoutAccountId?: string | null;
+  yookassaShopId?: string | null;
+}): string | null {
+  return seller.payoutAccountId ?? seller.yookassaShopId ?? null;
+}
+
+/** Продавец подключил приём выплат (совместимость со старыми записями). */
+function sellerOnboarded(seller: {
+  payoutOnboarded?: boolean;
+  yookassaOnboarded?: boolean;
+}): boolean {
+  return Boolean(seller.payoutOnboarded || seller.yookassaOnboarded);
+}
+
+function providerReady(provider: PaymentProvider): void {
+  if (!provider.isConfigured()) {
+    throw new AppError(errorCodes.INTERNAL, 'Платёжный провайдер не настроен', 500);
+  }
 }
 
 /**
@@ -58,31 +88,83 @@ async function notifyAdmin(subject: string, text: string): Promise<void> {
 }
 
 /**
- * Подключение продавца к ЮKassa. Онбординг магазина выполняется в личном
- * кабинете ЮKassa (API не предоставляет публичной кнопки Connect для платформ),
- * здесь мы только сохраняем Shop ID магазина-продавца для сплитования.
+ * Подключение продавца к выплатам. Онбординг счёта выполняется в личном
+ * кабинете провайдера (API не предоставляет публичной кнопки Connect для
+ * платформ), здесь мы только сохраняем реквизит счёта продавца.
+ *
+ * Legacy: ensureSellerYookassa(sellerId, shopId) — та же функция, поле shopId.
  */
 export async function ensureSellerYookassa(sellerId: string, shopId: string): Promise<{ shopId: string }> {
+  const result = await ensureSellerPayout(sellerId, shopId);
+  return { shopId: result.accountRef };
+}
+
+/** Провайдер-нейтральное подключение: сохраняет accountRef в payoutAccountId. */
+export async function ensureSellerPayout(
+  sellerId: string,
+  accountRef: string
+): Promise<{ accountRef: string }> {
   const seller = await prisma.user.findUnique({ where: { id: sellerId } });
   if (!seller) throw new AppError(errorCodes.NOT_FOUND, 'Продавец не найден', 404);
 
-  const normalized = shopId.trim();
+  const normalized = accountRef.trim();
   if (!normalized) {
-    throw new AppError(errorCodes.VALIDATION, 'Укажите Shop ID магазина ЮKassa', 400);
+    throw new AppError(errorCodes.VALIDATION, 'Укажите реквизит счёта продавца', 400);
   }
 
   await prisma.user.update({
     where: { id: sellerId },
-    data: { yookassaShopId: normalized, yookassaOnboarded: true },
+    // Legacy-поля пишем наравне с провайдер-нейтральными: старые проверки и
+    // тесты работают с yookassa*, новые — с payout*. Удаление legacy — отдельным
+    // решением после полного перехода.
+    data: {
+      yookassaShopId: normalized,
+      yookassaOnboarded: true,
+      payoutAccountId: normalized,
+      payoutOnboarded: true,
+    },
   });
-  return { shopId: normalized };
+  return { accountRef: normalized };
+}
+
+/** Текущий статус подключения выплат продавцом (провайдер-нейтральный). */
+export async function getSellerPayoutStatus(sellerId: string): Promise<{
+  payoutAccountId: string | null;
+  payoutOnboarded: boolean;
+  // legacy-фолбэк
+  yookassaShopId: string | null;
+  yookassaOnboarded: boolean;
+}> {
+  const user = await prisma.user.findUnique({
+    where: { id: sellerId },
+    select: {
+      payoutAccountId: true,
+      payoutOnboarded: true,
+      yookassaShopId: true,
+      yookassaOnboarded: true,
+    },
+  });
+  return {
+    payoutAccountId: user?.payoutAccountId ?? null,
+    payoutOnboarded: Boolean(user?.payoutOnboarded),
+    yookassaShopId: user?.yookassaShopId ?? null,
+    yookassaOnboarded: Boolean(user?.yookassaOnboarded),
+  };
 }
 
 export async function createEscrowOrder(input: {
   listingId: string;
   buyerId: string;
   idempotencyKey: string;
-}): Promise<{ order: Order; confirmationToken: string; paymentId: string }> {
+}): Promise<{
+  order: Order;
+  confirmationToken: string | null;
+  payUrl: string | null;
+  paymentId: string;
+}> {
+  const provider = getPaymentProvider();
+  providerReady(provider);
+
   // Сначала проверяем идемпотентность — повторный запрос с тем же ключом
   // должен вернуть существующий заказ, а не создавать дубликат.
   const existingOrder = await prisma.order.findUnique({
@@ -92,32 +174,80 @@ export async function createEscrowOrder(input: {
     if (existingOrder.listingId !== input.listingId) {
       throw new AppError(errorCodes.CONFLICT, 'Idempotency-ключ уже использован', 409);
     }
-    if (existingOrder.yookassaPaymentId) {
-      const payment = await getYookassaPayment(existingOrder.yookassaPaymentId);
-      const token = payment.confirmation?.confirmation_token;
-      if (!token) {
+    if (existingOrder.providerPaymentId) {
+      const status = await provider.getStatus(existingOrder.providerPaymentId);
+      if (provider.name === 'moneta') {
+        // Монета: до оплаты у операции нет якоря — пересобираем pay_url
+        // по CTID (= idempotencyKey) и сумме заказа.
+        if (status.status === 'pending' || status.status === 'unknown') {
+          const amountNum = Number(existingOrder.amount);
+          const url = buildAssistantPayUrl({
+            transactionId: existingOrder.idempotencyKey ?? existingOrder.providerPaymentId,
+            amountRub: monetaAmount(amountNum),
+            description: undefined,
+          });
+          return {
+            order: existingOrder,
+            confirmationToken: null,
+            payUrl: url,
+            paymentId: existingOrder.providerPaymentId,
+          };
+        }
         throw new AppError(errorCodes.CONFLICT, 'Платёж по заказу уже завершён', 409);
       }
-      return { order: existingOrder, confirmationToken: token, paymentId: existingOrder.yookassaPaymentId };
+      const token = status.anchor?.type === 'confirmation_token' ? status.anchor.token : null;
+      const payUrl = status.anchor?.type === 'pay_url' ? status.anchor.url : null;
+      if (!token && !payUrl) {
+        throw new AppError(errorCodes.CONFLICT, 'Платёж по заказу уже завершён', 409);
+      }
+      return {
+        order: existingOrder,
+        confirmationToken: token,
+        payUrl,
+        paymentId: existingOrder.providerPaymentId,
+      };
     }
     throw new AppError(errorCodes.CONFLICT, 'Заказ уже существует', 409);
   }
 
   const listing = await prisma.listing.findUnique({
     where: { id: input.listingId },
-    include: { order: true, seller: { select: { yookassaShopId: true, yookassaOnboarded: true, id: true } } },
+    include: {
+      seller: {
+        select: {
+          id: true,
+          payoutAccountId: true,
+          payoutOnboarded: true,
+          yookassaShopId: true,
+          yookassaOnboarded: true,
+        },
+      },
+    },
   });
   if (!listing) throw new AppError(errorCodes.NOT_FOUND, 'Объявление не найдено', 404);
   if (listing.sellerId === input.buyerId) {
     throw new AppError(errorCodes.VALIDATION, 'Нельзя купить собственное объявление', 400);
   }
-  if (listing.order) {
-    throw new AppError(errorCodes.CONFLICT, 'По этому объявлению уже есть заказ', 409);
+  // Активных заказов у объявления может быть только один — страховывает
+  // частичный уникальный индекс Order_listingId_active_key (гонку двух
+  // параллельных POST /orders закрывает catch P2002 ниже). Завершённые
+  // заказы (REFUNDED/RELEASED) не мешают: объявление снова продаётся.
+  const activeOrder = await prisma.order.findFirst({
+    where: { listingId: listing.id, status: { in: [...ACTIVE_ORDER_STATUSES] } },
+    select: { id: true, status: true },
+  });
+  if (activeOrder) {
+    throw new AppError(
+      errorCodes.CONFLICT,
+      `По этому объявлению уже есть активный заказ (${activeOrder.status})`,
+      409
+    );
   }
   if (listing.status !== 'ACTIVE') {
     throw new AppError(errorCodes.CONFLICT, 'Объявление недоступно для покупки', 409);
   }
-  if (!listing.seller.yookassaShopId || !listing.seller.yookassaOnboarded) {
+  const accountRef = sellerAccountRef(listing.seller);
+  if (!accountRef || !sellerOnboarded(listing.seller)) {
     throw new AppError(
       errorCodes.PAYMENT_REQUIRED,
       'Продавец ещё не подключил выплаты. Свяжитесь с продавцом.',
@@ -141,28 +271,21 @@ export async function createEscrowOrder(input: {
     throw new AppError(errorCodes.VALIDATION, 'Комиссия платформы превышает цену', 400);
   }
 
-  const payment = await createYookassaPayment({
-    amount,
-    description: `Оплата заказа на платформе (объявление: ${listing.title})`,
-    metadata: {
-      orderKey: input.idempotencyKey,
-      listingId: listing.id,
-      buyerId: input.buyerId,
-    },
-    transfers: [
-      {
-        account_id: listing.seller.yookassaShopId,
-        amount: toAmount(sellerAmount),
-        platform_fee_amount: toAmount(fee),
-        description: `Выплата за объявление «${listing.title}».`,
-      },
-    ],
+  const hold = await provider.createHold({
+    listingId: listing.id,
+    listingTitle: listing.title,
+    buyerId: input.buyerId,
+    sellerAccountRef: accountRef,
+    amountKopecks: toKopecks(amount),
+    platformFeeKopecks: toKopecks(fee),
     idempotencyKey: input.idempotencyKey,
   });
-  const confirmationToken = payment.confirmation?.confirmation_token;
-  if (!confirmationToken) {
-    await cancelYookassaPayment(payment.id, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
-    throw new AppError(errorCodes.INTERNAL, 'ЮKassa не выдала токен виджета', 502);
+  let confirmationToken: string | null = null;
+  let payUrl: string | null = null;
+  if (hold.anchor.type === 'confirmation_token') {
+    confirmationToken = hold.anchor.token;
+  } else {
+    payUrl = hold.anchor.url;
   }
 
   const order = await prisma.order.create({
@@ -171,18 +294,25 @@ export async function createEscrowOrder(input: {
       buyerId: input.buyerId,
       amount: listing.price,
       currency: listing.currency,
-      yookassaPaymentId: payment.id,
+      provider: provider.name.toUpperCase() as 'YOOKASSA' | 'MONETA' | 'MOCK',
+      providerPaymentId: hold.providerPaymentId,
+      // Legacy-дубль на время переезда (чтение/вебхуки старых заказов).
+      yookassaPaymentId: provider.name === 'yookassa' ? hold.providerPaymentId : null,
       idempotencyKey: input.idempotencyKey,
+      // Срок холда известен сразу: на нём держатся предупреждения покупателя
+      // (за 2 дня/за 12 часов) и перевод SHIPPED-заказа в DISPUTED.
+      holdExpiresAt: new Date(Date.now() + holdTtlDays * 86_400_000),
     },
   }).catch(async (err: unknown) => {
     // Гонка двух параллельных POST /orders: второй получает 409, а не 500.
+    // P2002 даёт и частичный индекс активных заказов, и idempotencyKey.
     // Созданный нами платёж отменяем, чтобы не висел сиротой-холдом.
     if (
       typeof err === 'object' && err !== null &&
       'code' in err && (err as { code?: string }).code === 'P2002'
     ) {
-      await cancelYookassaPayment(payment.id, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
-      throw new AppError(errorCodes.CONFLICT, 'По этому объявлению уже есть заказ', 409);
+      await provider.cancel(hold.providerPaymentId, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
+      throw new AppError(errorCodes.CONFLICT, 'По этому объявлению уже есть активный заказ', 409);
     }
     throw err;
   });
@@ -196,11 +326,11 @@ export async function createEscrowOrder(input: {
   if (reserved.count === 0) {
     // Статус увели из-под нас (модерация/снятие) — откатываем заказ и холд.
     await prisma.order.delete({ where: { id: order.id } }).catch(() => undefined);
-    await cancelYookassaPayment(payment.id, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
+    await provider.cancel(hold.providerPaymentId, cancelKeyFor(input.idempotencyKey)).catch(() => undefined);
     throw new AppError(errorCodes.CONFLICT, 'Объявление недоступно для покупки', 409);
   }
 
-  return { order, confirmationToken, paymentId: payment.id };
+  return { order, confirmationToken, payUrl, paymentId: hold.providerPaymentId };
 }
 
 export async function releaseOrder(orderId: string, actorId: string): Promise<void> {
@@ -212,21 +342,23 @@ export async function releaseOrder(orderId: string, actorId: string): Promise<vo
   if (order.buyerId !== actorId) {
     throw new AppError(errorCodes.FORBIDDEN, 'Подтвердить получение может только покупатель', 403);
   }
-  // Эскроу: release только после авторизации средств (PAID = waiting_for_capture).
-  // PENDING означает, что деньги ещё не удержаны — capture упадёт в ЮKassa.
-  if (order.status !== 'PAID') {
+  // Эскроу: release только после авторизации средств (PAID = холд удержан)
+  // или после отправки товара (SHIPPED — покупатель подтвердил получение).
+  // PENDING означает, что деньги ещё не удержаны — confirm упадёт у провайдера.
+  if (order.status !== 'PAID' && order.status !== 'SHIPPED') {
     throw new AppError(errorCodes.CONFLICT, `Нельзя подтвердить заказ в статусе ${order.status}`, 409);
   }
-  if (!order.yookassaPaymentId) {
+  if (!order.providerPaymentId) {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
   }
 
-  // Атомарный переход PAID -> RELEASING (тот же паттерн, что и отсчёт RESERVED
-  // в createEscrowOrder): гонку двух параллельных release решает updateMany,
-  // а не чтение-проверка. Проигравший получает 409 и не доходит до ЮKassa —
-  // двойной выплаты не бывает даже при двух одновременных запросах.
+  // Атомарный переход PAID/SHIPPED -> RELEASING (тот же паттерн, что и отсчёт
+  // RESERVED в createEscrowOrder): гонку двух параллельных release (и со спором:
+  // dispute забирает SHIPPED -> DISPUTED) решает updateMany, а не чтение-проверка.
+  // Проигравший получает 409 и не доходит до провайдера — двойной выплаты не бывает
+  // даже при двух одновременных запросах.
   const claimed = await prisma.order.updateMany({
-    where: { id: order.id, status: 'PAID' },
+    where: { id: order.id, status: { in: ['PAID', 'SHIPPED'] } },
     data: { status: 'RELEASING' },
   });
   if (claimed.count !== 1) {
@@ -242,18 +374,18 @@ export async function releaseOrder(orderId: string, actorId: string): Promise<vo
       subject: 'Заказ подтверждён и выплата отправлена',
       template: 'order-updated',
       templateData: { orderId: order.id, amount: String(order.amount) },
-      text: `Покупатель подтвердил получение. Средства переведены на ваш счёт ЮKassa.`,
+      text: `Покупатель подтвердил получение. Средства по сделке переведены вам.`,
     });
   }
 }
 
 /**
- * Выплата: capture сплит-платежа + финальная транзакция.
+ * Выплата: confirm (capture) холда + финальная транзакция.
  *
- * Идемпотентность: capture идёт с Idempotence-Key `release-capture-{orderId}`
+ * Идемпотентность: confirm идёт с ключом `release-capture-{orderId}`
  * (единый с recovery-джобой worker'а — см. shared/constants). Если процесс
- * падает между capture и финальной транзакцией, повторный прогон с тем же
- * ключом ЮKassa «дедуплицирует» операцию и возвращает исходный результат.
+ * падает между confirm и финальной транзакцией, повторный прогон с тем же
+ * ключом провайдер «дедуплицирует» и вернёт исходный результат.
  * Финальный переход RELEASING -> RELEASED дополнительно гейтится по статусу:
  * если заказ уже доведён, листинг не переворачивается повторно.
  */
@@ -262,20 +394,46 @@ export async function performRelease(order: {
   listingId: string;
   amount: unknown;
   currency: string;
-  yookassaPaymentId: string | null;
+  providerPaymentId: string | null;
   idempotencyKey: string | null;
-  listing?: { seller?: { yookassaShopId?: string | null } } | null;
 }): Promise<void> {
-  if (!order.yookassaPaymentId) {
+  if (!order.providerPaymentId) {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
   }
 
-  const payment = await captureYookassaPayment(order.yookassaPaymentId, captureKeyFor(order.id));
-  if (payment.status !== 'succeeded') {
+  const provider = getPaymentProvider();
+  providerReady(provider);
+
+  // Монета при release делает PaymentRequest с транзитного счёта на счёт
+  // продавца — нужны реквизиты продавца и суммы. Для ЮKassa/mock transfer
+  // игнорируется (пустой sellerAccountRef допустим).
+  const amountNum = Number(order.amount);
+  const fee = platformFeeForAmount(amountNum);
+  let sellerRef: string | null = null;
+  if (provider.name === 'moneta') {
+    const withSeller = await prisma.order.findUnique({
+      where: { id: order.id },
+      include: { listing: { include: { seller: true } } },
+    });
+    sellerRef = withSeller?.listing.seller
+      ? sellerAccountRef(withSeller.listing.seller)
+      : null;
+    if (!sellerRef) {
+      throw new AppError(
+        errorCodes.INTERNAL,
+        'Монета: у продавца нет реквизитов счёта для выплаты',
+        500
+      );
+    }
+  }
+  const confirmed = await provider.confirm(order.providerPaymentId, captureKeyFor(order.id), {
+    sellerAccountRef: sellerRef ?? '',
+    amountKopecks: toKopecks(amountNum - fee),
+    platformFeeKopecks: toKopecks(fee),
+  });
+  if (confirmed.status !== 'captured') {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не может быть завершён', 409);
   }
-
-  const fee = platformFeeForAmount(Number(order.amount));
 
   const finished = await prisma.$transaction(async (tx) => {
     const updated = await tx.order.updateMany({
@@ -295,7 +453,7 @@ export async function performRelease(order: {
   });
 
   if (!finished) {
-    logger.warn({ orderId: order.id, paymentId: order.yookassaPaymentId }, 'release already completed by a concurrent run');
+    logger.warn({ orderId: order.id, paymentId: order.providerPaymentId }, 'release already completed by a concurrent run');
   }
 }
 
@@ -306,6 +464,24 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   const isStaff = role === 'ADMIN' || role === 'MODERATOR';
   if (!isBuyer && !isStaff) {
     throw new AppError(errorCodes.FORBIDDEN, 'Нет прав на возврат', 403);
+  }
+  // SHIPPED: товар уехал — возврат возможен только через спор (для всех,
+  // включая staff: решение по спору принимается из статуса DISPUTED).
+  if (order.status === 'SHIPPED') {
+    throw new AppError(
+      errorCodes.CONFLICT,
+      'Товар уже отправлен: возврат возможен только через спор',
+      409
+    );
+  }
+  // DISPUTED: покупатель сам себе возврат не делает — решение примет
+  // поддержка (refundOrder из DISPUTED — это и есть «вернуть покупателю»).
+  if (isBuyer && order.status === 'DISPUTED') {
+    throw new AppError(
+      errorCodes.CONFLICT,
+      'По заказу уже открыт спор: решение примет поддержка',
+      409
+    );
   }
   // REFUNDING — возврат уже движется: повторный вызов (двойной клик, ретрай
   // после таймаута, одновременное действие покупателя и модератора) получает 409.
@@ -318,13 +494,13 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   if (order.status === 'RELEASED' || order.status === 'RELEASING' || order.status === 'REFUNDED') {
     throw new AppError(errorCodes.CONFLICT, `Нельзя вернуть заказ в статусе ${order.status}`, 409);
   }
-  if (!order.yookassaPaymentId) {
+  if (!order.providerPaymentId) {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не найден', 409);
   }
 
   // Атомарный клейм возврата (PAID/…/DISPUTED -> REFUNDING). Гонку двух
   // параллельных refundOrder решает updateMany, как у releaseOrder: проигравший
-  // получает 409 и НЕ доходит до ЮKassa, поэтому двойного cancel/refund не бывает.
+  // получает 409 и НЕ доходит до провайдера, поэтому двойного cancel/refund не бывает.
   const claimed = await prisma.order.updateMany({
     where: { id: order.id, status: { in: ['PENDING', 'PAID', 'DISPUTED'] } },
     data: { status: 'REFUNDING' },
@@ -333,35 +509,41 @@ export async function refundOrder(orderId: string, actorId: string, role: string
     throw new AppError(errorCodes.CONFLICT, 'Возврат уже обрабатывается', 409);
   }
 
+  const provider = getPaymentProvider();
   const previousStatus = order.status;
+  const paymentId = order.providerPaymentId;
   try {
-    const payment = await getYookassaPayment(order.yookassaPaymentId);
-    if (payment.status === 'succeeded') {
+    const payment = await provider.getStatus(paymentId);
+    if (payment.status === 'captured') {
       // Деньги уже удержаны после capture — оформляем полный возврат
       // (комиссия платформы возвращается за счёт магазина продавца).
-      await refundYookassaPayment(order.yookassaPaymentId, Number(order.amount), refundKeyFor(order.id));
-    } else if (payment.status === 'waiting_for_capture' || payment.status === 'pending') {
-      await cancelYookassaPayment(order.yookassaPaymentId, refundCancelKeyFor(order.id)).catch(async (err) => {
-        // Могли опоздать: холд истёк и ЮKassa уже отменила платёж сама.
-        const now = await getYookassaPayment(order.yookassaPaymentId!);
+      await provider.refund({
+        providerPaymentId: paymentId,
+        amountKopecks: toKopecks(order.amount),
+        idempotencyKey: refundKeyFor(order.id),
+      });
+    } else if (payment.status === 'authorized' || payment.status === 'pending') {
+      await provider.cancel(paymentId, refundCancelKeyFor(order.id)).catch(async (err) => {
+        // Могли опоздать: холд истёк и провайдер уже отменил платёж сам.
+        const now = await provider.getStatus(paymentId);
         if (now.status === 'canceled') return; // деньги уже вернулись покупателю
         throw err;
       });
     } else if (payment.status === 'canceled') {
       // Деньги уже вернулись покупателю (авто-отмена истёкшего холда) — идемпотентно завершаем.
-      logger.info({ orderId: order.id, paymentId: order.yookassaPaymentId }, 'refund: payment already canceled');
+      logger.info({ orderId: order.id, paymentId }, 'refund: payment already canceled');
     } else {
       throw new AppError(errorCodes.CONFLICT, 'Платёж в неподходящем статусе', 409);
     }
   } catch (err) {
-    // ЮKassa недоступна/отклонила — не оставляем заказ навсегда в REFUNDING:
+    // Провайдер недоступен/отклонил — не оставляем заказ навсегда в REFUNDING:
     // возвращаем статус, с которого клеймили. Гейтим по REFUNDING, чтобы не
     // затереть параллельный переход (например, вебхук уже провёл REFUNDED).
     await prisma.order.updateMany({
       where: { id: order.id, status: 'REFUNDING' },
       data: { status: previousStatus },
     });
-    logger.warn({ err, orderId: order.id }, 'refund: yookassa call failed, order moved back from REFUNDING');
+    logger.warn({ err, orderId: order.id }, 'refund: provider call failed, order moved back from REFUNDING');
     throw err;
   }
 
@@ -378,103 +560,326 @@ export async function refundOrder(orderId: string, actorId: string, role: string
 }
 
 /**
- * Вебхук ЮKassa. Подписи нет: подлинность уведомления проверяем по
- * 1) IP из официального аллоулиста ЮKassa; 2) повторному GET текущего статуса
- * платежа (сверяем со статусом из уведомления). Идемпотентность — через redis.
+ * Продавец отмечает «Отправил / передал»: PAID -> SHIPPED.
+ * После отправки покупатель уже не может сделать самостоятельный возврат —
+ * только спор (см. refundOrder/openDispute).
  */
-export async function handleYookassaNotification(
-  rawBody: Buffer,
-  ip?: string
-): Promise<{ received: boolean; handled?: string }> {
-  if (!env.YOOKASSA_INSECURE_WEBHOOKS && (!ip || !isTrustedYookassaIp(ip))) {
-    logger.warn({ ip }, 'yookassa webhook from untrusted ip');
-    throw new AppError(errorCodes.UNAUTHORIZED, 'Неизвестный отправитель уведомления', 401);
+export async function shipOrder(
+  orderId: string,
+  actorId: string,
+  input: { comment?: string; trackingNumber?: string }
+): Promise<void> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      listing: { select: { sellerId: true, title: true } },
+      buyer: { select: { email: true } },
+    },
+  });
+  if (!order) throw new AppError(errorCodes.NOT_FOUND, 'Заказ не найден', 404);
+  if (order.listing.sellerId !== actorId) {
+    throw new AppError(errorCodes.FORBIDDEN, 'Отправку может отметить только продавец', 403);
+  }
+  if (order.status === 'SHIPPED') {
+    throw new AppError(errorCodes.CONFLICT, 'Заказ уже отправлен', 409);
+  }
+  if (order.status !== 'PAID') {
+    throw new AppError(errorCodes.CONFLICT, `Нельзя отметить отправку в статусе ${order.status}`, 409);
   }
 
-  let body: { type?: string; event?: string; object?: unknown };
-  try {
-    body = JSON.parse(rawBody.toString('utf8')) as typeof body;
-  } catch {
-    throw new AppError(errorCodes.VALIDATION, 'Некорректное тело уведомления', 400);
+  // Атомарный клейм PAID -> SHIPPED: гонку с release/refund/dispute решает
+  // updateMany — проигравший получает 409 и не трогает статус.
+  const claimed = await prisma.order.updateMany({
+    where: { id: order.id, status: 'PAID' },
+    data: {
+      status: 'SHIPPED',
+      shippedAt: new Date(),
+      shipComment: input.comment ?? null,
+      trackingNumber: input.trackingNumber ?? null,
+    },
+  });
+  if (claimed.count !== 1) {
+    throw new AppError(errorCodes.CONFLICT, 'Статус заказа уже изменился', 409);
   }
-  if (body.type !== 'notification') {
-    throw new AppError(errorCodes.VALIDATION, 'Ожидалось уведомление ЮKassa', 400);
+
+  if (order.buyer.email) {
+    await enqueueEmail({
+      to: order.buyer.email,
+      subject: 'Продавец отправил товар',
+      template: 'order-updated',
+      templateData: { orderId: order.id },
+      text:
+        `Продавец отметил отправку товара по заказу «${order.listing.title}».` +
+        (input.trackingNumber ? ` Трек-номер: ${input.trackingNumber}.` : '') +
+        ' Как получите товар — подтвердите получение, и средства перейдут продавцу. ' +
+        ' Если товар не пришёл — откройте спор на странице заказа.',
+    }).catch((err) => logger.warn({ err, orderId: order.id }, 'ship email failed'));
   }
-  const event = body.event;
-  const object = body.object as
-    | ({ id?: string; payment_id?: string; status?: string } & Record<string, unknown>)
-    | undefined;
-  if (!event || !object?.id) {
-    throw new AppError(errorCodes.VALIDATION, 'Некорректное уведомление', 400);
+}
+
+/**
+ * Покупатель открывает спор: только из SHIPPED -> DISPUTED.
+ * Клейм атомарный, dispute.create — в той же транзакции, чтобы не остался
+ * «висящий» спор при проигранной гонке с release (SHIPPED -> RELEASING).
+ */
+export async function openDispute(
+  orderId: string,
+  actorId: string,
+  input: { reason: string; comment?: string; photos?: string[] }
+): Promise<void> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      listing: { select: { sellerId: true, title: true } },
+      buyer: { select: { email: true } },
+    },
+  });
+  if (!order) throw new AppError(errorCodes.NOT_FOUND, 'Заказ не найден', 404);
+  if (order.buyerId !== actorId) {
+    throw new AppError(errorCodes.FORBIDDEN, 'Спор может открыть только покупатель', 403);
+  }
+  if (order.status === 'DISPUTED') {
+    throw new AppError(errorCodes.CONFLICT, 'Спор по заказу уже открыт', 409);
+  }
+  if (order.status !== 'SHIPPED') {
+    throw new AppError(
+      errorCodes.CONFLICT,
+      'Спор открывается после отправки товара (статус отправлен)',
+      409
+    );
+  }
+
+  const seller = await prisma.user.findUnique({
+    where: { id: order.listing.sellerId },
+    select: { email: true },
+  });
+
+  const opened = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.order.updateMany({
+      where: { id: order.id, status: 'SHIPPED' },
+      data: { status: 'DISPUTED' },
+    });
+    if (claimed.count !== 1) return false;
+    await tx.dispute.create({
+      data: {
+        orderId: order.id,
+        openedById: actorId,
+        reason: input.reason,
+        comment: input.comment ?? null,
+        photos: input.photos ?? [],
+      },
+    });
+    return true;
+  });
+  if (!opened) {
+    throw new AppError(errorCodes.CONFLICT, 'Статус заказа уже изменился, спор не открыт', 409);
+  }
+
+  const mail = {
+    template: 'order-updated' as const,
+    templateData: { orderId: order.id },
+  };
+  if (order.buyer.email) {
+    await enqueueEmail({
+      to: order.buyer.email,
+      subject: 'Открыт спор по заказу',
+      ...mail,
+      text: `Вы открыли спор по заказу «${order.listing.title}». Причина: ${input.reason}. Поддержка рассмотрит заявку и пришлёт результат.`,
+    }).catch((err) => logger.warn({ err, orderId: order.id }, 'dispute email (buyer) failed'));
+  }
+  if (seller?.email) {
+    await enqueueEmail({
+      to: seller.email,
+      subject: 'По заказу открыт спор',
+      ...mail,
+      text: `Покупатель открыл спор по заказу «${order.listing.title}». Причина: ${input.reason}. Деньги удерживаются до решения поддержки.`,
+    }).catch((err) => logger.warn({ err, orderId: order.id }, 'dispute email (seller) failed'));
+  }
+  await notifyAdmin(
+    'Открыт спор по заказу',
+    `Заказ ${order.id} («${order.listing.title}»): покупатель открыл спор. Причина: ${input.reason}.`
+  );
+}
+
+/**
+ * Решение по спору (staff): SELLER — выплата продавцу (DISPUTED -> RELEASING
+ * -> capture), BUYER — возврат покупателю (refundOrder клеймит DISPUTED ->
+ * REFUNDING). Оба пути атомарны, поэтому одновременные «выплатить» и
+ * «вернуть» не конфликтуют: победитель закрывает спор, проигравший получает 409.
+ */
+export async function resolveDispute(
+  orderId: string,
+  staffId: string,
+  role: string,
+  input: { decision: 'SELLER' | 'BUYER'; comment: string }
+): Promise<void> {
+  const isStaff = role === 'ADMIN' || role === 'MODERATOR';
+  if (!isStaff) {
+    throw new AppError(errorCodes.FORBIDDEN, 'Решение по спору принимает поддержка', 403);
+  }
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      listing: { include: { seller: { select: { email: true, name: true } } } },
+      buyer: { select: { email: true, name: true } },
+    },
+  });
+  if (!order) throw new AppError(errorCodes.NOT_FOUND, 'Заказ не найден', 404);
+  if (order.status !== 'DISPUTED') {
+    throw new AppError(
+      errorCodes.CONFLICT,
+      `Нельзя закрыть спор по заказу в статусе ${order.status}`,
+      409
+    );
+  }
+
+  if (input.decision === 'BUYER') {
+    // Возврат: внутри refundOrder — claim DISPUTED -> REFUNDING + откат
+    // статуса при ошибке ЮKassa (спор остаётся открытым до успеха).
+    await refundOrder(order.id, staffId, role);
+  } else {
+    const claimed = await prisma.order.updateMany({
+      where: { id: order.id, status: 'DISPUTED' },
+      data: { status: 'RELEASING' },
+    });
+    if (claimed.count !== 1) {
+      throw new AppError(errorCodes.CONFLICT, 'Спор уже закрыт', 409);
+    }
+    await performRelease(order);
+  }
+
+  await prisma.dispute.updateMany({
+    where: { orderId: order.id, status: 'OPEN' },
+    data: {
+      status: 'RESOLVED',
+      resolution: input.decision,
+      resolutionComment: input.comment,
+      resolvedById: staffId,
+      resolvedAt: new Date(),
+    },
+  });
+
+  const decisionText =
+    input.decision === 'SELLER'
+      ? 'Решение: в пользу продавца — средства переведены продавцу.'
+      : 'Решение: в пользу покупателя — средства возвращены покупателю.';
+  const mail = {
+    template: 'order-updated' as const,
+    templateData: { orderId: order.id },
+  };
+  if (order.buyer.email) {
+    await enqueueEmail({
+      to: order.buyer.email,
+      subject: 'Спор по заказу закрыт',
+      ...mail,
+      text: `Спор по заказу «${order.listing.title}» закрыт. ${decisionText} Комментарий поддержки: ${input.comment}`,
+    }).catch((err) => logger.warn({ err, orderId: order.id }, 'resolve email (buyer) failed'));
+  }
+  if (order.listing.seller.email) {
+    await enqueueEmail({
+      to: order.listing.seller.email,
+      subject: 'Спор по заказу закрыт',
+      ...mail,
+      text: `Спор по заказу «${order.listing.title}» закрыт. ${decisionText} Комментарий поддержки: ${input.comment}`,
+    }).catch((err) => logger.warn({ err, orderId: order.id }, 'resolve email (seller) failed'));
+  }
+}
+
+/**
+ * Вебхук платежного провайдера. Подлинность уведомления (IP/подпись)
+ * проверяет сам провайдер в handleWebhook. Здесь:
+ * 1) нормализованное событие от провайдера;
+ * 2) идемпотентность доставки (redis, ключ dedupeId события);
+ * 3) повторный getStatus — сверка текущего статуса со статусом уведомления
+ *    (отсекает устаревшие доставки);
+ * 4) переходы заказа — только по providerPaymentId/orderKey.
+ */
+export async function handlePaymentWebhook(
+  rawBody: Buffer,
+  ip?: string,
+  query?: Record<string, string>
+): Promise<{ received: boolean; handled?: string }> {
+  const provider = getPaymentProvider();
+  const event = await provider.handleWebhook({ rawBody, ip, query });
+  if (!event) {
+    return { received: true, handled: 'ignored' };
   }
 
   const redis = getRedis();
-  const dedupe = await redis.set(`yookassa:webhook:${event}:${object.id}`, '1', 'EX', 86400, 'NX');
+  const dedupe = await redis.set(
+    `payment:webhook:${provider.name}:${event.dedupeId}`,
+    '1',
+    'EX',
+    86400,
+    'NX'
+  );
   if (dedupe !== 'OK') {
     return { received: true, handled: 'duplicate' };
   }
 
-  if (event === 'refund.succeeded') {
-    const paymentId = object.payment_id;
-    if (!paymentId) return { received: true, handled: event };
-    const payment = await getYookassaPayment(paymentId).catch((err) => {
-      logger.warn({ err, paymentId }, 'yookassa refund webhook: payment lookup failed, skipping');
+  if (event.type === 'refund') {
+    const paymentId = event.providerPaymentId;
+    const payment = await provider.getStatus(paymentId).catch((err) => {
+      logger.warn({ err, paymentId }, 'refund webhook: payment lookup failed, skipping');
       return null;
     });
     if (!payment) return { received: true, handled: 'verification_failed' };
 
     const existing = await prisma.order.findFirst({
-      where: { yookassaPaymentId: paymentId },
+      where: { providerPaymentId: paymentId },
       select: { id: true, listingId: true, status: true },
     });
-    if (!existing) return { received: true, handled: event };
+    if (!existing) return { received: true, handled: 'refund.succeeded' };
 
     if (existing.status === 'RELEASED' || existing.status === 'RELEASING') {
       // Деньги уже переведены продавцу (или переводятся): платформа получила
       // возврат средств продавца, но «авто-возврат» покупателю тут запрещён —
       // иначе сумма спишется дважды. Статус не трогаем, уведомляем админа.
       logger.warn({
-        orderId: existing.id, paymentId, refundId: object.id, status: existing.status,
+        orderId: existing.id, paymentId, refundId: event.providerRefundId, status: existing.status,
       }, 'refund after pay-out; manual resolution required');
       await notifyAdmin(
         'Возврат по уже выплаченной сделке',
-        `Refund ${object.id} по платежу ${paymentId} на сумму ${payment.amount?.value ?? '?'} RUB. ` +
+        `Возврат ${event.providerRefundId ?? '?'} по платежу ${paymentId}. ` +
           `Заказ ${existing.id} уже переведён продавцу (статус ${existing.status}): ` +
-          `возврат покупателю оформите вручную через кабинет ЮKassa.`
+          `возврат покупателю оформите вручную в кабинете платежного провайдера.`
       );
-      return { received: true, handled: event };
+      return { received: true, handled: 'refund.succeeded' };
     }
 
     const marked = await prisma.order.updateMany({
-      where: { yookassaPaymentId: paymentId, status: { notIn: ['REFUNDED', 'RELEASING', 'RELEASED', 'DISPUTED'] } },
+      where: { providerPaymentId: paymentId, status: { notIn: ['REFUNDED', 'RELEASING', 'RELEASED', 'DISPUTED'] } },
       data: { status: 'REFUNDED' },
     });
     if (marked.count > 0) {
       const target = await prisma.order.findFirst({
-        where: { yookassaPaymentId: paymentId },
+        where: { providerPaymentId: paymentId },
         select: { listingId: true },
       });
       if (target) await unlockListing(target.listingId);
-      logger.info({ orderId: existing.id, paymentId, refundId: object.id }, 'payment refunded via webhook');
+      logger.info({ orderId: existing.id, paymentId, refundId: event.providerRefundId }, 'payment refunded via webhook');
     }
-    return { received: true, handled: event };
+    return { received: true, handled: 'refund.succeeded' };
   }
 
-  // Остальные события — платежи. Платёж ищем по id из уведомления.
-  const paymentId = (object as { id: string }).id;
-  const payment = await getYookassaPayment(paymentId).catch((err) => {
-    logger.warn({ err, paymentId }, 'yookassa payment webhook: payment lookup failed, skipping');
+  // Платёжное событие: сверяем статус повторным запросом к провайдеру.
+  const paymentId = event.providerPaymentId;
+  const payment = await provider.getStatus(paymentId).catch((err) => {
+    logger.warn({ err, paymentId }, 'payment webhook: lookup failed, skipping');
     return null;
   });
-  if (!payment || payment.status !== object.status) {
+  if (!payment || (event.notifiedStatus && payment.status !== event.notifiedStatus)) {
     // Устаревшая/повторная доставка: статус в уведомлении не совпал с текущим.
-    logger.warn({ paymentId, event, objectStatus: object.status, currentStatus: payment?.status }, 'yookassa webhook status mismatch, skipping');
+    logger.warn(
+      { paymentId, notified: event.notifiedStatus, currentStatus: payment?.status },
+      'webhook status mismatch, skipping'
+    );
     return { received: true, handled: 'stale' };
   }
 
-  const orderKey = payment.metadata?.orderKey;
+  const orderKey = payment.orderKey;
   switch (payment.status) {
-    case 'waiting_for_capture': {
+    case 'authorized': {
       // Эскроу: средства авторизованы и удерживаются платформой.
       if (orderKey) {
         await prisma.order.updateMany({
@@ -484,9 +889,9 @@ export async function handleYookassaNotification(
       }
       break;
     }
-    case 'succeeded': {
-      // Succeeded наступает ПОСЛЕ capture в releaseOrder (или вручную из
-      // кабинета ЮKassa). Никогда не делаем авто-RELEASE без подтверждения
+    case 'captured': {
+      // Captured наступает ПОСЛЕ confirm в releaseOrder (или вручную из
+      // кабинета провайдера). Никогда не делаем авто-RELEASE без подтверждения
       // покупателя: только доводим PENDING/PAID до PAID.
       if (orderKey) {
         const existing = await prisma.order.findUnique({
@@ -518,12 +923,12 @@ export async function handleYookassaNotification(
         }
       }
       const held = await prisma.order.updateMany({
-        where: { yookassaPaymentId: paymentId, status: { in: ['PAID', 'DISPUTED'] } },
+        where: { providerPaymentId: paymentId, status: { in: ['PAID', 'DISPUTED', 'SHIPPED'] } },
         data: { status: 'REFUNDED' },
       });
       if (held.count > 0) {
         const target = await prisma.order.findFirst({
-          where: { yookassaPaymentId: paymentId },
+          where: { providerPaymentId: paymentId },
           select: { listingId: true },
         });
         if (target) await unlockListing(target.listingId);
@@ -533,8 +938,10 @@ export async function handleYookassaNotification(
     default:
       break;
   }
-  return { received: true, handled: event };
+  return { received: true, handled: event.dedupeId };
 }
 
-/** Сверка DI/приватных хелперов для внутренних нужд. */
-export type { YooPayment };
+/**
+ * Legacy-алиас для существующих тестов/вызовов. Основное имя — handlePaymentWebhook.
+ */
+export const handleYookassaNotification = handlePaymentWebhook;

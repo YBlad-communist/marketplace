@@ -1,5 +1,5 @@
 import { prisma } from '@marketplace/db';
-import { MODERATION_BLOCKED_KEYWORDS } from '@marketplace/shared';
+import { findBlockedKeyword } from '@marketplace/shared';
 
 export interface ModerationDecision {
   approve: boolean;
@@ -15,11 +15,10 @@ export async function moderateListingContent(input: {
   title: string;
   description: string;
 }): Promise<ModerationDecision> {
-  const text = `${input.title}\n${input.description}`.toLowerCase();
-  for (const word of MODERATION_BLOCKED_KEYWORDS) {
-    if (text.includes(word)) {
-      return { approve: false, reason: `Запрещённый контент: «${word}»` };
-    }
+  const text = `${input.title}\n${input.description}`;
+  const blocked = findBlockedKeyword(text);
+  if (blocked) {
+    return { approve: false, reason: `Запрещённый контент: «${blocked}»` };
   }
   if (/(https?:\/\/|www\.|t\.me\/|telegram)/i.test(text) && /(заработок|доход|казино|ставк)/i.test(text)) {
     return { approve: false, reason: 'Подозрение на спам/мошенничество: ссылки + финансовые обещания' };

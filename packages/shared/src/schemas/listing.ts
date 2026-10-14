@@ -28,6 +28,10 @@ export const listingCreateSchema = z.object({
   address: z.string().trim().max(300, 'Адрес не длиннее 300 символов').optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
+  // Состояние товара и способ получения — опциональные (старые объявления без них);
+  // null допустим и при создании, и при редактировании (сброс значения).
+  condition: z.enum(['NEW', 'USED']).nullable().optional(),
+  handover: z.enum(['PICKUP', 'DELIVERY']).nullable().optional(),
   attributes: attributesSchema,
   imageKeys: z
     .array(
@@ -61,6 +65,8 @@ export const listingQuerySchema = z.object({
   city: z.string().trim().max(120).optional(),
   minPrice: z.coerce.number().min(0).optional(),
   maxPrice: z.coerce.number().min(0).optional(),
+  condition: z.enum(['NEW', 'USED']).optional(),
+  handover: z.enum(['PICKUP', 'DELIVERY']).optional(),
   lat: z.coerce.number().min(-90).max(90).optional(),
   lng: z.coerce.number().min(-180).max(180).optional(),
   radiusKm: z.coerce.number().min(0.1).max(2000).default(50),

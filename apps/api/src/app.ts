@@ -87,9 +87,10 @@ export function createApp(): Express {
   app.use(compression());
   app.use(cookieParser());
 
-  app.post(
+  // GET/POST: ЮKassa шлёт POST JSON; Монета Pay URL — GET или POST query.
+  app.all(
     '/api/webhooks/yookassa',
-    express.raw({ type: 'application/json', limit: '1mb', verify: captureRawBody }),
+    express.raw({ type: '*/*', limit: '1mb', verify: captureRawBody }),
     webhookRoutes
   );
 

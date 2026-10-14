@@ -22,6 +22,18 @@ enum ListingStatus {
   ARCHIVED
 }
 
+/// Состояние товара (объявления).
+enum ItemCondition {
+  NEW
+  USED
+}
+
+/// Способ получения товара.
+enum HandoverMethod {
+  PICKUP
+  DELIVERY
+}
+
 enum OrderStatus {
   PENDING
   PAID
@@ -30,6 +42,14 @@ enum OrderStatus {
   REFUNDING
   REFUNDED
   DISPUTED
+  // SHIPPED добавлен в КОНЕЦ перечисления: так же значение добавляется в БД
+  // (ALTER TYPE ... ADD VALUE дописывает в конец), порядок совпадает у схемы и БД.
+  SHIPPED
+}
+
+enum DisputeStatus {
+  OPEN
+  RESOLVED
 }
 
 enum AttributeType {
@@ -62,6 +82,14 @@ enum ReportStatus {
   DISMISSED
 }
 
+// Платёжный провайдер сделки (этап абстракции платежей).
+// MOCK — только тесты/дев-окружение, в проде не используется.
+enum PaymentProvider {
+  YOOKASSA
+  MONETA
+  MOCK
+}
+
 model User {
     id                 String                     @id @default(cuid())
     email              String?                    @unique
@@ -76,6 +104,12 @@ model User {
   banReason          String?
   rating             Float                      @default(0)
   ratingCount        Int                        @default(0)
+  // --- Поля онбординга продавца ---
+  // Провайдер-нейтральные: payoutAccountId — Shop ID (ЮKassa) или
+  // MNT_ACCOUNT_ID расширенного счёта (Монета). yookassa* — legacy на время
+  // переезда (обслуживаются до полного перехода, удаление — отдельным решением).
+  payoutAccountId    String?
+  payoutOnboarded    Boolean                    @default(false)
   yookassaShopId     String?
   yookassaOnboarded  Boolean                    @default(false)
   emailVerifiedAt    DateTime?
@@ -92,6 +126,8 @@ model User {
   reviewsAuthored    Review[]                   @relation("author")
   favorites          Favorite[]
   orders             Order[]                    @relation("buyer")
+  disputesOpened     Dispute[]                  @relation("DisputeOpener")
+  disputesResolved   Dispute[]                  @relation("DisputeResolver")
   reportsAuthored    Report[]                   @relation("author")
   viewedListings     ViewedListing[]
   savedSearches      SavedSearch[]
@@ -155,6 +191,10 @@ model Listing {
   address     String?
   lat         Float?
   lng         Float?
+  // Состояние товара и способ получения — опциональные поля (старые
+  // объявления без значений просто не фильтруются по ним).
+  condition   ItemCondition?
+  handover    HandoverMethod?
   attributes  Json              @default("{}")
   viewsCount  Int               @default(0)
   searchTs    Unsupported("tsvector")?
@@ -165,7 +205,10 @@ model Listing {
   images       ListingImage[]
   favoritedBy  Favorite[]
   conversations Conversation[]
-  order        Order?
+  // История заказов не ограничена одним: после возврата/выплаты объявление
+  // снова продаётся, поэтому связь one-to-many. Активный заказ один — это
+  // держит частичный уникальный индекс Order_listingId_active_key.
+  orders       Order[]
   viewedBy     ViewedListing[]
 
   @@index([categoryId, status, city])
@@ -260,16 +303,37 @@ model Message {
 
 model Order {
   id                       String      @id @default(cuid())
-  listingId                String      @unique
+  // Без @unique: после возврата/выплаты история заказов по объявлению растёт.
+  // «Не более одного активного заказа» держит частичный уникальный индекс
+  // Order_listingId_active_key (миграция 20261008000001). В схеме индекс
+  // НЕ объявлен: Prisma не умеет видеть индексы с WHERE-предикатом, любая
+  // декларация привела бы к drift (generate CREATE существующего индекса).
+  listingId                String
   listing                  Listing     @relation(fields: [listingId], references: [id])
   buyerId                  String
   buyer                    User        @relation("buyer", fields: [buyerId], references: [id])
   amount                   Decimal     @db.Decimal(12, 2)
   currency                 String      @default("RUB")
   status                   OrderStatus @default(PENDING)
+  // --- Провайдер платежа (этап абстракции) ---
+  // providerPaymentId — идентификатор платежа у активного провайдера сделки
+  // (yookassaPaymentId — legacy, дублируется на время переезда).
+  provider                 PaymentProvider @default(YOOKASSA)
+  providerPaymentId        String?
+  providerPayoutId         String?
   yookassaPaymentId        String?
   platformFee              Decimal?    @db.Decimal(12, 2)
   releasedAt               DateTime?
+  // Срок холда: когда удержание денег заканчивается (для предупреждений
+  // и перевода SHIPPED-заказа в DISPUTED вместо авто-возврата).
+  holdExpiresAt            DateTime?
+  shippedAt                DateTime?
+  shipComment              String?
+  trackingNumber           String?
+  // Одноразовые флаги предупреждений покупателя (за 2 дня и за 12 часов).
+  holdWarned2dAt           DateTime?
+  holdWarned12hAt          DateTime?
+  dispute                  Dispute?
   createdAt                DateTime    @default(now())
   updatedAt                DateTime    @updatedAt
   idempotencyKey           String?     @unique
@@ -277,6 +341,32 @@ model Order {
 
   @@index([buyerId, createdAt])
   @@index([status])
+  @@index([status, holdExpiresAt])
+  @@index([providerPaymentId])
+}
+
+model Dispute {
+  id                 String        @id @default(cuid())
+  orderId            String        @unique
+  order              Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  // null — спор открыл системный воркер (истёкший холд у SHIPPED-заказа).
+  openedById         String?
+  openedBy           User?         @relation("DisputeOpener", fields: [openedById], references: [id], onDelete: SetNull)
+  reason             String
+  comment            String?
+  // Ключи изображений в S3 (до 5 шт.), URL резолвит API.
+  photos             String[]
+  status             DisputeStatus @default(OPEN)
+  // 'SELLER' — выплата продавцу, 'BUYER' — возврат покупателю.
+  resolution         String?
+  // Обязателен при вынесении решения (проверяет API); null, пока спор открыт.
+  resolutionComment  String?
+  resolvedById       String?
+  resolvedBy         User?         @relation("DisputeResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  createdAt          DateTime      @default(now())
+  resolvedAt         DateTime?
+
+  @@index([status, createdAt])
 }
 
 model Review {

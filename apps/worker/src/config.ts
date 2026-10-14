@@ -35,6 +35,18 @@ export const env = {
   // (ЮKassa сама отменяет авторизации, не завершённые capture, примерно через
   // 7 дней; точный срок зависит от договора и способа оплаты).
   YOOKASSA_HOLD_TTL_DAYS: Number(process.env.YOOKASSA_HOLD_TTL_DAYS ?? 7),
+  // Платёжный провайдер (тот же env, что у API): yookassa | moneta | mock.
+  PAYMENT_PROVIDER: process.env.PAYMENT_PROVIDER ?? 'yookassa',
+  // Монета: реквизиты расширенного счёта продавца (для release-рекавери).
+  MONETA_ACCOUNT_ID: process.env.MONETA_ACCOUNT_ID ?? '',
+  MONETA_ACCOUNT_CODE: process.env.MONETA_ACCOUNT_CODE ?? '',
+  MONETA_TRANSIT_ACCOUNT: process.env.MONETA_TRANSIT_ACCOUNT ?? '',
+  MONETA_API_USERNAME: process.env.MONETA_API_USERNAME ?? '',
+  MONETA_API_PASSWORD: process.env.MONETA_API_PASSWORD ?? '',
+  MONETA_PAYMENT_PASSWORD: process.env.MONETA_PAYMENT_PASSWORD ?? '',
+  MONETA_TEST_MODE: process.env.MONETA_TEST_MODE === 'true' || process.env.MONETA_TEST_MODE === '1',
+  MONETA_BASE_URL: process.env.MONETA_BASE_URL ?? 'https://service.moneta.ru/services',
+  MONETA_ASSISTANT_URL: process.env.MONETA_ASSISTANT_URL ?? 'https://moneta.ru/assistant.htm',
 };
 
 export const isProd = env.NODE_ENV === 'production';

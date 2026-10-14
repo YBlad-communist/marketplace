@@ -3,7 +3,7 @@ import { decideHoldOutcome } from './expiredHolds.js';
 
 describe('decideHoldOutcome', () => {
   it('живой холд не трогаем', () => {
-    expect(decideHoldOutcome('waiting_for_capture')).toBe('held');
+    expect(decideHoldOutcome('authorized')).toBe('held');
   });
 
   it('мёртвый холд закрываем возвратом', () => {
@@ -12,8 +12,8 @@ describe('decideHoldOutcome', () => {
   });
 
   it('непонятные статусы не трогаем, только лог', () => {
-    expect(decideHoldOutcome('succeeded')).toBe('unknown');
-    expect(decideHoldOutcome('processing')).toBe('unknown');
-    expect(decideHoldOutcome('')).toBe('unknown');
+    expect(decideHoldOutcome('captured')).toBe('unknown');
+    expect(decideHoldOutcome('refunded')).toBe('unknown');
+    expect(decideHoldOutcome('unknown')).toBe('unknown');
   });
 });

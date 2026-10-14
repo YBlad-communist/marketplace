@@ -15,6 +15,7 @@ import { sendEmail } from './mailer.js';
 import { sendSms } from './smsru.js';
 import { cleanupExpiredTokens } from './cleanup.js';
 import { checkExpiredHoldsJob } from './expiredHolds.js';
+import { checkHoldWarningsJob } from './holdWarnings.js';
 import { recoverStuckReleasingOrders } from './releasingRecovery.js';
 import { sendOfflineDigest } from './offlineDigest.js';
 import { processImageJob } from './imageJob.js';
@@ -129,6 +130,9 @@ export function createWorkers(): Worker[] {
         } else if (job.name === MAINTENANCE_JOBS.CHECK_EXPIRED_HOLDS) {
           const result = await checkExpiredHoldsJob();
           logger.info({ jobName: job.name, ...result }, 'expired holds checked');
+        } else if (job.name === MAINTENANCE_JOBS.CHECK_HOLD_WARNINGS) {
+          const result = await checkHoldWarningsJob();
+          logger.info({ jobName: job.name, ...result }, 'hold warnings checked');
         } else if (job.name === MAINTENANCE_JOBS.RECOVER_RELEASING) {
           const result = await recoverStuckReleasingOrders();
           logger.info({ jobName: job.name, ...result }, 'stuck releasing orders recovered');

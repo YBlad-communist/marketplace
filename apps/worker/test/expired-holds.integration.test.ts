@@ -81,6 +81,19 @@ async function createStalePaidOrder(tag: string, paymentId: string): Promise<{ o
   return { orderId: order.id, listingId: listing.id };
 }
 
+/** SHIPPED-заказ с явным (опционально истёкшим) сроком холда. */
+async function createShippedOrder(
+  tag: string,
+  holdExpiresAt: Date
+): Promise<{ orderId: string; listingId: string }> {
+  const { orderId, listingId } = await createStalePaidOrder(tag, `yoo_hold_${unique}_${tag}`);
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { status: 'SHIPPED', shippedAt: new Date(Date.now() - 9 * 86400_000), holdExpiresAt },
+  });
+  return { orderId, listingId };
+}
+
 beforeAll(async () => {
   await prisma.$connect();
   const cat = await prisma.category.findFirst({ where: { slug: 'electronics' } });
@@ -107,6 +120,37 @@ afterAll(async () => {
 });
 
 describeInfra('expired holds job: атомарный клейм не перетирает начатую выплату', () => {
+  it('истёкший SHIPPED-холд уходит в DISPUTED (не авто-возврат), спор создаётся', async () => {
+    const { orderId, listingId } = await createShippedOrder(
+      'ship-stale',
+      new Date(Date.now() - 8 * 86400_000)
+    );
+
+    const result = await checkExpiredHoldsJob();
+
+    expect(result.disputed).toBeGreaterThanOrEqual(1);
+    const order = await prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { dispute: true },
+    });
+    expect(order.status).toBe('DISPUTED');
+    expect(order.dispute).toBeTruthy();
+    expect(order.dispute!.status).toBe('OPEN');
+    expect(order.dispute!.resolution).toBeNull();
+    // Товар у покупателя — объявление не освобождается автоматически.
+    const listing = await prisma.listing.findUniqueOrThrow({ where: { id: listingId } });
+    expect(listing.status).toBe('RESERVED');
+  });
+
+  it('SHIPPED с живым сроком холда не трогается', async () => {
+    const { orderId } = await createShippedOrder('ship-alive', new Date(Date.now() + 3 * 86400_000));
+
+    await checkExpiredHoldsJob();
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe('SHIPPED');
+  });
+
   it('истёкший PAID-холд возвращается (REFUNDED + объявление ACTIVE)', async () => {
     const { orderId, listingId } = await createStalePaidOrder('claim', `yoo_hold_${unique}_claim`);
 

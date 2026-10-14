@@ -98,6 +98,8 @@ function buildWhereSync(input: ListingQueryInput): Prisma.ListingWhereInput {
   }
   if (input.city) where.city = input.city;
   if (input.cityId) where.cityId = input.cityId;
+  if (input.condition) where.condition = input.condition;
+  if (input.handover) where.handover = input.handover;
   // Текстовый запрос и для обычных сортировок: раньше q применялся только при
   // sort=relevance (полный текст), из-за чего поиск с датой/ценой молча
   // возвращал всё. AND-группа не конфликтует с OR (категория).
@@ -225,6 +227,8 @@ async function textSearchIds(
   const price = whereBase.price as Prisma.DecimalFilter | undefined;
   if (price?.gte !== undefined) conditions.push(Prisma.sql`"Listing"."price" >= ${price.gte}`);
   if (price?.lte !== undefined) conditions.push(Prisma.sql`"Listing"."price" <= ${price.lte}`);
+  if (whereBase.condition) conditions.push(Prisma.sql`"Listing"."condition" = ${whereBase.condition}`);
+  if (whereBase.handover) conditions.push(Prisma.sql`"Listing"."handover" = ${whereBase.handover}`);
   if (whereBase.favoritedBy) {
     const fav = whereBase.favoritedBy as { some: { userId: string } };
     conditions.push(Prisma.sql`EXISTS (SELECT 1 FROM "Favorite" f WHERE f."listingId" = "Listing".id AND f."userId" = ${fav.some.userId})`);

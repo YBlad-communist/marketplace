@@ -15,6 +15,8 @@ export interface CurrentUser {
   ratingCount: number;
   yookassaShopId: string | null;
   yookassaOnboarded: boolean;
+  payoutAccountId?: string | null;
+  payoutOnboarded?: boolean;
 }
 
 interface AuthState {

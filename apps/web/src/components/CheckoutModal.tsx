@@ -46,9 +46,16 @@ function loadWidgetScript(): Promise<void> {
   });
 }
 
+/**
+ * Модалка оплаты «безопасная сделка».
+ * - confirmationToken — виджет ЮKassa (embedded);
+ * - payUrl — редирект на платёжную форму Монеты (Assistant).
+ * Сервер возвращает одно из двух в зависимости от активного провайдера.
+ */
 export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [payUrl, setPayUrl] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<{ destroy: () => void } | null>(null);
   // Idempotency-ключ стабилен на время открытой модалки: повторный рендер
@@ -59,11 +66,29 @@ export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await post<{ data: { order: { id: string }; confirmationToken: string } }>('/api/orders', {
+        const res = await post<{
+          data: {
+            order: { id: string };
+            confirmationToken: string | null;
+            payUrl: string | null;
+          };
+        }>('/api/orders', {
           listingId,
           idempotencyKey: idempotencyKeyRef.current,
         });
         if (cancelled) return;
+
+        // Провайдер с редиректом (Монета) — показываем кнопку перехода.
+        if (res.data.payUrl) {
+          setPayUrl(res.data.payUrl);
+          setStatus('ready');
+          return;
+        }
+
+        if (!res.data.confirmationToken) {
+          throw new Error('Сервер не вернул способ оплаты');
+        }
+
         await loadWidgetScript();
         if (cancelled) return;
 
@@ -102,7 +127,17 @@ export function CheckoutModal({ listingId, price, currency, onClose }: Props) {
         </div>
         {status === 'loading' && <p className="text-sm text-textSecondary">Подготавливаем оплату…</p>}
         {status === 'error' && <p className="mb-4 text-sm text-danger">{error ?? 'Не удалось начать оплату'}</p>}
-        {status === 'ready' && (
+        {status === 'ready' && payUrl && (
+          <div className="space-y-3">
+            <p className="text-sm text-textSecondary">
+              Перейдите на защищённую страницу оплаты, чтобы завершить сделку.
+            </p>
+            <a href={payUrl} className="btn-primary block w-full text-center" onClick={onClose}>
+              Перейти к оплате
+            </a>
+          </div>
+        )}
+        {status === 'ready' && !payUrl && (
           <div id="yoomoney-checkout" ref={containerRef} className="min-h-[320px]" />
         )}
         {status === 'error' && (

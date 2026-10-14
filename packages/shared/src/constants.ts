@@ -9,7 +9,22 @@ export const ALLOWED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp'] as const;
 
 export const USER_ROLES = ['USER', 'MODERATOR', 'ADMIN'] as const;
 export const LISTING_STATUSES = ['PENDING', 'ACTIVE', 'RESERVED', 'SOLD', 'REJECTED', 'ARCHIVED'] as const;
-export const ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'RELEASED', 'REFUNDING', 'REFUNDED', 'DISPUTED'] as const;
+export const ORDER_STATUSES = ['PENDING', 'PAID', 'RELEASING', 'RELEASED', 'REFUNDING', 'REFUNDED', 'DISPUTED', 'SHIPPED'] as const;
+
+/**
+ * Активные (незавершённые) статусы заказа: по ним считается «не более одного
+ * активного заказа на объявление» (частичный уникальный индекс в БД),
+ * блокировка редактирования/удаления объявления и удаления аккаунта.
+ * RELEASED/REFUNDED в списке нет — после них объявление снова продаётся.
+ */
+export const ACTIVE_ORDER_STATUSES = ['PENDING', 'PAID', 'SHIPPED', 'RELEASING', 'REFUNDING', 'DISPUTED'] as const;
+
+/**
+ * Окна предупреждений покупателя о скором сгорании холда: письмо и баннер
+ * на странице заказа за 2 дня и за 12 часов до holdExpiresAt.
+ */
+export const HOLD_WARN_2D_MS = 2 * 24 * 3600_000;
+export const HOLD_WARN_12H_MS = 12 * 3600_000;
 
 export type UserRole = (typeof USER_ROLES)[number];
 export type ListingStatus = (typeof LISTING_STATUSES)[number];
@@ -52,3 +67,26 @@ export const MODERATION_BLOCKED_KEYWORDS = [
   'паспорт',
   'диплом купить',
 ] as const;
+
+/**
+ * Первое запрещённое ключевое слово в тексте или null.
+ *
+ * Совпадение засчитывается только в начале слова: раньше обычный includes
+ * ловил «ставк» внутри «доставка» и отклонял обычные объявления про доставку.
+ * Окончания слова при этом ловятся («наркотик» → «наркотики»), потому что
+ * проверяется только символ перед найденным вхождением.
+ */
+export function findBlockedKeyword(text: string): string | null {
+  const lower = text.toLowerCase();
+  for (const keyword of MODERATION_BLOCKED_KEYWORDS) {
+    let from = 0;
+    let idx = lower.indexOf(keyword, from);
+    while (idx !== -1) {
+      const before = idx === 0 ? '' : lower[idx - 1];
+      if (!before || !/[a-zа-яё]/.test(before)) return keyword;
+      from = idx + 1;
+      idx = lower.indexOf(keyword, from);
+    }
+  }
+  return null;
+}

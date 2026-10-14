@@ -59,6 +59,16 @@ export async function enqueueExpiredHoldsCheck(): Promise<void> {
   });
 }
 
+/** Предупреждения о скором сгорании холда (за 2 дня/за 12 часов) — раз в час. */
+export async function enqueueHoldWarningsCheck(): Promise<void> {
+  await getQueue(QUEUES.MAINTENANCE).add(MAINTENANCE_JOBS.CHECK_HOLD_WARNINGS, {}, {
+    repeat: { every: 3600_000 },
+    jobId: 'hold-warnings-repeat',
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 60_000 },
+  });
+}
+
 export async function enqueueReleasingRecovery(): Promise<void> {
   await getQueue(QUEUES.MAINTENANCE).add(MAINTENANCE_JOBS.RECOVER_RELEASING, {}, {
     repeat: { every: 15 * 60_000 },

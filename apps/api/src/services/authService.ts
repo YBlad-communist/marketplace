@@ -233,6 +233,8 @@ export function publicUser(user: {
   ratingCount: number;
   yookassaShopId: string | null;
   yookassaOnboarded: boolean;
+  payoutAccountId?: string | null;
+  payoutOnboarded?: boolean;
   createdAt: Date;
 }) {
   return {
@@ -249,6 +251,8 @@ export function publicUser(user: {
     ratingCount: user.ratingCount,
     yookassaShopId: user.yookassaShopId,
     yookassaOnboarded: user.yookassaOnboarded,
+    payoutAccountId: user.payoutAccountId ?? null,
+    payoutOnboarded: Boolean(user.payoutOnboarded),
     createdAt: user.createdAt,
   };
 }

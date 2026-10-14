@@ -105,4 +105,49 @@ describeInfra('listings (integration)', () => {
       expect(Number(l.price)).toBeLessThanOrEqual(300);
     }
   });
+
+  it('filters by condition and handover (обычный путь и полнотекстовый)', async () => {
+    const make = async (title: string, condition: string, handover: string) => {
+      const res = await request(app)
+        .post('/api/listings')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ title, description: 'Описание товара для проверки фильтра состояния', price: 150, categoryId, city: 'Казань', condition, handover });
+      expect(res.status).toBe(201);
+      return res.body.data.listing.id as string;
+    };
+    const newDeliveryId = await make('Состояние новый доставка', 'NEW', 'DELIVERY');
+    const usedPickupId = await make('Состояние б у самовывоз', 'USED', 'PICKUP');
+
+    // Обычный путь (без q) — Prisma-where.
+    const plain = await request(app)
+      .get('/api/listings')
+      .query({ condition: 'NEW', handover: 'DELIVERY', limit: 50 });
+    expect(plain.status).toBe(200);
+    const plainIds = (plain.body.data.items as { id: string }[]).map((l) => l.id);
+    expect(plainIds).toContain(newDeliveryId);
+    expect(plainIds).not.toContain(usedPickupId);
+
+    // Полнотекстовый путь (с q) — raw-SQL where.
+    const text = await request(app)
+      .get('/api/listings')
+      .query({ q: 'Состояние', condition: 'USED', limit: 50 });
+    expect(text.status).toBe(200);
+    const textIds = (text.body.data.items as { id: string }[]).map((l) => l.id);
+    expect(textIds).toContain(usedPickupId);
+    expect(textIds).not.toContain(newDeliveryId);
+
+    const detail = await request(app).get(`/api/listings/${newDeliveryId}`);
+    expect(detail.body.data.listing.condition).toBe('NEW');
+    expect(detail.body.data.listing.handover).toBe('DELIVERY');
+
+    // Сброс значения при редактировании (null проходит валидацию).
+    const cleared = await request(app)
+      .patch(`/api/listings/${newDeliveryId}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ condition: null, handover: null });
+    expect(cleared.status).toBe(200);
+    const afterClear = await prisma.listing.findUniqueOrThrow({ where: { id: newDeliveryId } });
+    expect(afterClear.condition).toBeNull();
+    expect(afterClear.handover).toBeNull();
+  });
 });

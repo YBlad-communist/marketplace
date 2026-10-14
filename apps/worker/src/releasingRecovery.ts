@@ -1,36 +1,32 @@
 import { prisma } from '@marketplace/db';
+import { getPaymentProvider } from '@marketplace/payments';
 import { releaseCaptureIdempotencyKey } from '@marketplace/shared';
+import type { NormalizedPaymentStatus } from '@marketplace/shared';
 import { env } from './config.js';
 import { logger, sendEmail } from './mailer.js';
-import {
-  captureYookassaPayment,
-  configureYookassa,
-  getYookassaPayment,
-  yookassaConfigured,
-} from './lib/yookassa.js';
-
-configureYookassa(env.YOOKASSA_SHOP_ID, env.YOOKASSA_SECRET_KEY);
 
 /**
- * Решение по статусу платежа ЮKassa для застрявшего в RELEASING заказа.
- * - 'finish' — деньги доступны (succeeded или waiting_for_capture): доводим
- *              выплату повторным capture (идемпотентно, тот же ключ, что и API);
+ * Решение по нормализованному статусу платежа для застрявшего в RELEASING заказа.
+ * - 'finish' — деньги доступны (captured — уже распределены, authorized — холд
+ *              жив): доводим выплату повторным confirm (идемпотентно, тот же
+ *              ключ, что и API);
  * - 'refund' — платёж мёртв (canceled): переводим заказ в REFUNDED и снимаем
  *              резерв с объявления (деньги уже вернулись покупателю или не были списаны);
  * - 'skip'   — непонятное состояние, не трогаем, только лог.
  */
-export function decideReleasingOutcome(status: string): 'finish' | 'refund' | 'skip' {
-  if (status === 'succeeded' || status === 'waiting_for_capture') return 'finish';
+export function decideReleasingOutcome(status: NormalizedPaymentStatus): 'finish' | 'refund' | 'skip' {
+  if (status === 'captured' || status === 'authorized') return 'finish';
   if (status === 'canceled') return 'refund';
   return 'skip';
 }
 
 /**
  * Recovery-джоба: заказы, застрявшие в RELEASING (процесс упал между capture
- * и финальной транзакцией). Сверяемся с ЮKassa и доводим заказ до конца.
+ * и финальной транзакцией). Сверяемся с платёжным провайдером и доводим заказ
+ * до конца.
  *
  * Идемпотентность строится на том же, что и releaseOrder:
- * - capture идёт с тем же ключом (release-capture-{id}) — повторный прогон не
+ * - confirm идёт с тем же ключом (release-capture-{id}) — повторный прогон не
  *   создаст второго списания;
  * - финальный переход RELEASING -> RELEASED гейтится по статусу, поэтому
  *   повторный запуск джобы (ретрай BullMQ) не «захватывает» уже доведённые
@@ -41,8 +37,9 @@ export async function recoverStuckReleasingOrders(): Promise<{
   finished: number;
   refunded: number;
 }> {
-  if (!yookassaConfigured()) {
-    logger.warn('YOOKASSA_SECRET_KEY is not configured, skipping releasing recovery');
+  const paymentProvider = getPaymentProvider();
+  if (!paymentProvider.isConfigured()) {
+    logger.warn({ provider: paymentProvider.name }, 'payment provider is not configured, skipping releasing recovery');
     return { checked: 0, finished: 0, refunded: 0 };
   }
 
@@ -56,22 +53,29 @@ export async function recoverStuckReleasingOrders(): Promise<{
       listingId: true,
       amount: true,
       currency: true,
+      provider: true,
+      providerPaymentId: true,
       yookassaPaymentId: true,
       idempotencyKey: true,
       buyer: { select: { email: true } },
-      listing: { select: { seller: { select: { email: true } } } },
+      listing: {
+        select: {
+          seller: { select: { email: true, payoutAccountId: true } },
+        },
+      },
     },
   });
 
   let finished = 0;
   let refunded = 0;
   for (const order of stale) {
-    if (!order.yookassaPaymentId) continue;
+    const paymentId = order.providerPaymentId ?? order.yookassaPaymentId;
+    if (!paymentId) continue;
 
-    let status: string;
+    let status: NormalizedPaymentStatus;
     try {
-      const payment = await getYookassaPayment(order.yookassaPaymentId);
-      status = payment.status;
+      const result = await paymentProvider.getStatus(paymentId);
+      status = result.status;
     } catch (err) {
       logger.warn({ err, orderId: order.id }, 'releasing recovery: payment lookup failed, skipping');
       continue;
@@ -85,7 +89,7 @@ export async function recoverStuckReleasingOrders(): Promise<{
 
     if (outcome === 'finish') {
       try {
-        await finishReleasingOrder(order);
+        await finishReleasingOrder(order, paymentId);
         finished += 1;
       } catch (err) {
         logger.warn({ err, orderId: order.id, status }, 'releasing recovery: release failed, will retry');
@@ -123,31 +127,54 @@ export async function recoverStuckReleasingOrders(): Promise<{
 
 /**
  * Доводим выплату RELEASING-заказа. Тот же шаг, что и в
- * performRelease (apps/api): capture сплит-платежа + транзакция RELEASING->RELEASED.
- * Распределение по transfers было задано при создании платежа, поэтому тело
- * capture пустое; повторный capture с тем же ключом идемпотентен.
+ * performRelease (apps/api): confirm сплит-платежа + транзакция RELEASING->RELEASED.
+ * Распределение по transfers было задано при создании платежа (ЮKassa);
+ * Монета при confirm требует sellerAccountRef + суммы — грузим из БД.
+ * Повторный confirm с тем же ключом идемпотентен.
  */
-async function finishReleasingOrder(order: {
-  id: string;
-  listingId: string;
-  amount: unknown;
-  currency: string;
-  yookassaPaymentId: string | null;
-  idempotencyKey: string | null;
-  buyer?: { email: string | null } | null;
-  listing?: { seller?: { email: string | null } | null } | null;
-}): Promise<void> {
-  if (!order.yookassaPaymentId) throw new Error('no yookassa payment');
+async function finishReleasingOrder(
+  order: {
+    id: string;
+    listingId: string;
+    amount: unknown;
+    currency: string;
+    providerPaymentId: string | null;
+    yookassaPaymentId: string | null;
+    idempotencyKey: string | null;
+    listing?: { seller?: { email: string | null; payoutAccountId: string | null } | null } | null;
+  },
+  paymentId: string
+): Promise<void> {
+  const paymentProvider = getPaymentProvider();
+  const amountNum = Number(order.amount);
+  const fee = Number(((amountNum * env.YOOKASSA_PLATFORM_FEE_BASIS_POINTS) / 10000).toFixed(2));
+  const sellerAmount = Number((amountNum - fee).toFixed(2));
 
-  const payment = await captureYookassaPayment(
-    order.yookassaPaymentId,
-    releaseCaptureIdempotencyKey(order.id)
-  );
-  if (payment.status !== 'succeeded') {
-    throw new Error(`capture not succeeded: ${payment.status}`);
+  // Монета при confirm требует реквизиты продавца (PaymentRequest);
+  // ЮKassa/mock transfer игнорируют. Для монеты грузим payoutAccountId.
+  let transfer:
+    | { sellerAccountRef: string; amountKopecks: number; platformFeeKopecks: number }
+    | undefined;
+  if (paymentProvider.name === 'moneta') {
+    const sellerRef = order.listing?.seller?.payoutAccountId;
+    if (!sellerRef) {
+      throw new Error('seller payout account not set (moneta)');
+    }
+    transfer = {
+      sellerAccountRef: sellerRef,
+      amountKopecks: Math.round(sellerAmount * 100),
+      platformFeeKopecks: Math.round(fee * 100),
+    };
   }
 
-  const fee = Number(((Number(order.amount) * env.YOOKASSA_PLATFORM_FEE_BASIS_POINTS) / 10000).toFixed(2));
+  const result = await paymentProvider.confirm(
+    paymentId,
+    releaseCaptureIdempotencyKey(order.id),
+    transfer
+  );
+  if (result.status !== 'captured') {
+    throw new Error(`confirm not captured: ${result.status}`);
+  }
 
   const updated = await prisma.$transaction(async (tx) => {
     const res = await tx.order.updateMany({
@@ -167,7 +194,7 @@ async function finishReleasingOrder(order: {
   });
 
   if (updated) {
-    logger.info({ orderId: order.id, paymentId: order.yookassaPaymentId }, 'stuck releasing order finished by recovery');
+    logger.info({ orderId: order.id, paymentId }, 'stuck releasing order finished by recovery');
     const sellerEmail = order.listing?.seller?.email;
     if (sellerEmail) {
       await sendEmail({
@@ -175,7 +202,7 @@ async function finishReleasingOrder(order: {
         subject: 'Заказ подтверждён и выплата отправлена',
         template: 'order-updated',
         templateData: { orderId: order.id, amount: String(order.amount) },
-        text: 'Покупатель подтвердил получение. Средства переведены на ваш счёт ЮKassa.',
+        text: 'Покупатель подтвердил получение. Средства переведены на ваш счёт.',
       }).catch((err) => logger.warn({ err, orderId: order.id }, 'releasing recovery email failed'));
     }
   }

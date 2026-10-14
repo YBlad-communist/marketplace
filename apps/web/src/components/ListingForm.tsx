@@ -95,6 +95,8 @@ export function ListingForm({ mode, initial }: Props) {
   const [price, setPrice] = useState(initial ? String(initial.price) : '');
   const [city, setCity] = useState(initial?.city ?? '');
   const [address, setAddress] = useState(initial?.address ?? '');
+  const [condition, setCondition] = useState<string>(initial?.condition ?? '');
+  const [handover, setHandover] = useState<string>(initial?.handover ?? '');
   const [attributeValues, setAttributeValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(Object.entries(initial?.attributes ?? {}).map(([k, v]) => [k, String(v)]))
   );
@@ -242,6 +244,8 @@ export function ListingForm({ mode, initial }: Props) {
       ...(cityId ? { cityId } : {}),
       // Адрес необязателен; пустая строка = сброс (API приводит к null).
       address: address.trim(),
+      condition: condition ? condition : null,
+      handover: handover ? handover : null,
       attributes: attrsPayload,
       imageKeys,
     };
@@ -346,6 +350,25 @@ export function ListingForm({ mode, initial }: Props) {
         </div>
       )}
 
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="label">Состояние</label>
+          <select className="input" value={condition} onChange={(e) => setCondition(e.target.value)}>
+            <option value="">Не указано</option>
+            <option value="NEW">Новый</option>
+            <option value="USED">Б/у</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Способ получения</label>
+          <select className="input" value={handover} onChange={(e) => setHandover(e.target.value)}>
+            <option value="">Не указано</option>
+            <option value="PICKUP">Самовывоз</option>
+            <option value="DELIVERY">Доставка</option>
+          </select>
+        </div>
+      </div>
+
       <div>
         <label className="label">
           Адрес <span className="font-normal text-textMuted">— необязательно</span>
@@ -380,7 +403,7 @@ export function ListingForm({ mode, initial }: Props) {
             onChange={(e) => changeChild(e.target.value)}
             disabled={!selectedParent || (selectedParent.children ?? []).length === 0}
           >
-            <option value="">Вся категория «{selectedParent?.name ?? '…'}»</option>
+            <option value="">{selectedParent ? `Вся категория «${selectedParent.name}»` : 'Сначала выберите раздел'}</option>
             {(selectedParent?.children ?? []).map((ch) => (
               <option key={ch.id} value={ch.id}>
                 {ch.name}

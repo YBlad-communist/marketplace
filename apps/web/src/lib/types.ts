@@ -75,6 +75,10 @@ export interface ListingDto {
   address?: string | null;
   lat?: number | null;
   lng?: number | null;
+  /** Состояние товара: NEW — новый, USED — б/у (null — не указано). */
+  condition?: 'NEW' | 'USED' | null;
+  /** Способ получения: PICKUP — самовывоз, DELIVERY — доставка. */
+  handover?: 'PICKUP' | 'DELIVERY' | null;
   attributes: Record<string, string | number | boolean | null>;
   viewsCount: number;
   isFavorite?: boolean;
@@ -124,14 +128,40 @@ export interface MessageDto {
   imageThumbUrl?: string | null;
 }
 
+export interface OrderDisputeDto {
+  id: string;
+  reason: string;
+  comment: string | null;
+  photos: string[];
+  status: 'OPEN' | 'RESOLVED';
+  resolution: 'SELLER' | 'BUYER' | null;
+  resolutionComment: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
 export interface OrderDto {
   id: string;
   listingId: string;
   buyerId: string;
   amount: number;
   currency: string;
-  status: 'PENDING' | 'PAID' | 'RELEASING' | 'RELEASED' | 'REFUNDING' | 'REFUNDED' | 'DISPUTED';
+  status:
+    | 'PENDING'
+    | 'PAID'
+    | 'RELEASING'
+    | 'RELEASED'
+    | 'REFUNDING'
+    | 'REFUNDED'
+    | 'DISPUTED'
+    | 'SHIPPED';
   createdAt: string;
+  /** Срок холда: до него покупатель подтверждает получение / открывает спор. */
+  holdExpiresAt?: string | null;
+  shippedAt?: string | null;
+  shipComment?: string | null;
+  trackingNumber?: string | null;
+  dispute?: OrderDisputeDto | null;
   listing?: ListingDto;
   buyer?: { id: string; name: string };
   reviewedByMe: boolean;

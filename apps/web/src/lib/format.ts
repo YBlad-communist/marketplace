@@ -29,6 +29,19 @@ export function cn(...classes: Array<string | false | null | undefined>): string
   return classes.filter(Boolean).join(' ');
 }
 
+/**
+ * Склонение существительного по числу: plural(5, ['объявление','объявления','объявлений']).
+ * Формы — [1, 2-4, 5+]; для 11-14 берётся форма «множественное» (русские правила).
+ */
+export function plural(n: number, forms: [string, string, string]): string {
+  const abs = Math.abs(n) % 100;
+  const n1 = abs % 10;
+  if (abs > 10 && abs < 20) return forms[2];
+  if (n1 > 1 && n1 < 5) return forms[1];
+  if (n1 === 1) return forms[0];
+  return forms[2];
+}
+
 export function fieldError(err: { fields?: Record<string, string> } | null, field: string): string | undefined {
   return err?.fields?.[field];
 }

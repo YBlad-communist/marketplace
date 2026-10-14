@@ -1,20 +1,34 @@
 import { Router } from 'express';
 import { prisma } from '@marketplace/db';
-import { createOrderSchema, sellerYookassaConnectSchema, AppError, errorCodes } from '@marketplace/shared';
+import { env } from '../config.js';
+import {
+  createOrderSchema,
+  orderDisputeSchema,
+  orderShipSchema,
+  sellerYookassaConnectSchema,
+  sellerPayoutConnectSchema,
+  AppError,
+  errorCodes,
+} from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import {
   createEscrowOrder,
   ensureSellerYookassa,
+  ensureSellerPayout,
+  getSellerPayoutStatus,
+  openDispute,
   releaseOrder,
   refundOrder,
+  shipOrder,
 } from '../services/paymentService.js';
+import { getPaymentProvider } from '../services/payments/index.js';
 
 const router: Router = Router();
 
 router.post('/', authenticate, validate(createOrderSchema), async (req, res, next) => {
   try {
-    const { confirmationToken, order } = await createEscrowOrder({
+    const { confirmationToken, payUrl, order } = await createEscrowOrder({
       listingId: req.body.listingId,
       buyerId: req.userId!,
       idempotencyKey: req.body.idempotencyKey,
@@ -27,7 +41,9 @@ router.post('/', authenticate, validate(createOrderSchema), async (req, res, nex
           amount: Number(order.amount),
           currency: order.currency,
         },
+        // confirmation_token — виджет ЮKassa; pay_url — редирект Монеты.
         confirmationToken,
+        payUrl,
       },
     });
   } catch (err) {
@@ -92,6 +108,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
           },
         },
         buyer: { select: { id: true, name: true, avatarUrl: true } },
+        dispute: true,
       },
     });
     if (!order) throw new AppError(errorCodes.NOT_FOUND, 'Заказ не найден', 404);
@@ -104,7 +121,16 @@ router.get('/:id', authenticate, async (req, res, next) => {
     const reviewed = order.status === 'RELEASED'
       ? await prisma.review.findFirst({ where: { authorId: req.userId!, orderId: order.id } })
       : null;
-    res.json({ data: { order: { ...order, amount: Number(order.amount), reviewedByMe: Boolean(reviewed) } } });
+    // Фото спора храним ключами S3 — для клиента отдаём готовые URL.
+    const dispute = order.dispute
+      ? {
+          ...order.dispute,
+          photos: order.dispute.photos.map((k) => (k.startsWith('http') ? k : `${env.S3_PUBLIC_BASE_URL}/${k}`)),
+        }
+      : null;
+    res.json({
+      data: { order: { ...order, dispute, amount: Number(order.amount), reviewedByMe: Boolean(reviewed) } },
+    });
   } catch (err) {
     next(err);
   }
@@ -113,6 +139,33 @@ router.get('/:id', authenticate, async (req, res, next) => {
 router.post('/:id/release', authenticate, async (req, res, next) => {
   try {
     await releaseOrder(req.params.id, req.userId!);
+    res.json({ data: { success: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Продавец: «Отправил / передал» — PAID -> SHIPPED (дальше возврат только через спор).
+router.post('/:id/ship', authenticate, validate(orderShipSchema), async (req, res, next) => {
+  try {
+    await shipOrder(req.params.id, req.userId!, {
+      comment: req.body.comment,
+      trackingNumber: req.body.trackingNumber,
+    });
+    res.json({ data: { success: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Покупатель: открыть спор — только из SHIPPED.
+router.post('/:id/dispute', authenticate, validate(orderDisputeSchema), async (req, res, next) => {
+  try {
+    await openDispute(req.params.id, req.userId!, {
+      reason: req.body.reason,
+      comment: req.body.comment,
+      photos: req.body.photos,
+    });
     res.json({ data: { success: true } });
   } catch (err) {
     next(err);
@@ -128,10 +181,45 @@ router.post('/:id/refund', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/seller/connect', authenticate, validate(sellerYookassaConnectSchema), async (req, res, next) => {
+// Подключение выплат: провайдер-нейтральная схема (accountRef).
+// Legacy-клиенты шлют shopId — принимаем оба варианта.
+router.post(
+  '/seller/connect',
+  authenticate,
+  validate(sellerPayoutConnectSchema.or(sellerYookassaConnectSchema)),
+  async (req, res, next) => {
+    try {
+      const accountRef = req.body.accountRef ?? req.body.shopId;
+      const result = await ensureSellerPayout(req.userId!, accountRef);
+      res.json({ data: { ...result, shopId: result.accountRef } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// Legacy-алиас той же операции (старое имя функции сохранено).
+router.post('/seller/connect-yookassa', authenticate, validate(sellerYookassaConnectSchema), async (req, res, next) => {
   try {
     const result = await ensureSellerYookassa(req.userId!, req.body.shopId);
     res.json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Инфо «как подключить выплаты»: поля/шаги текущего провайдера + статус продавца.
+router.get('/seller/onboarding', authenticate, async (req, res, next) => {
+  try {
+    const provider = getPaymentProvider();
+    const status = await getSellerPayoutStatus(req.userId!);
+    res.json({
+      data: {
+        provider: provider.name,
+        onboarding: provider.getSellerOnboardingInfo(),
+        status,
+      },
+    });
   } catch (err) {
     next(err);
   }

@@ -6,8 +6,37 @@ export const createOrderSchema = z.object({
   idempotencyKey: z.string().min(8).max(128).regex(/^[a-zA-Z0-9._-]+$/),
 });
 
+/** Продавец отмечает «Отправил / передал» — заказ PAID -> SHIPPED. */
+export const orderShipSchema = z.object({
+  comment: z.string().trim().max(500).optional(),
+  trackingNumber: z.string().trim().max(100).optional(),
+});
+
+/** Открытие спора покупателем — заказ SHIPPED -> DISPUTED. */
+export const orderDisputeSchema = z.object({
+  reason: z.string().trim().min(3, 'Укажите причину спора').max(200),
+  comment: z.string().trim().max(1000).optional(),
+  // Ключи изображений в S3 (presign через /api/uploads/images/presign).
+  photos: z.array(z.string().min(1).max(500)).max(5, 'Не более 5 фото').optional(),
+});
+
+/** Решение по спору в админке: комментарий обязателен. */
+export const adminDisputeResolveSchema = z.object({
+  decision: z.enum(['SELLER', 'BUYER']),
+  comment: z.string().trim().min(3, 'Комментарий обязателен').max(1000),
+});
+
 export const sellerYookassaConnectSchema = z.object({
   shopId: z.string().trim().min(1, 'Укажите Shop ID магазина ЮKassa').max(64),
+});
+
+/**
+ * Провайдер-нейтральная схема подключения выплат: поле называется accountRef
+ * (Shop ID ЮKassa / номер расширенного счёта Монеты). Старая shopId-схема
+ * сохранена для совместимости legacy-клиентов.
+ */
+export const sellerPayoutConnectSchema = z.object({
+  accountRef: z.string().trim().min(1, 'Укажите реквизит счёта продавца').max(64),
 });
 
 export const reviewCreateSchema = z.object({

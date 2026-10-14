@@ -79,7 +79,7 @@ export function ListingCard({ listing }: { listing: ListingDto }) {
         </div>
         <div className="p-3">
           <div className="text-lg font-bold leading-heading tracking-tight text-textPrimary">
-            {formatPrice(listing.price, listing.currency ?? 'EUR')}
+            {formatPrice(listing.price, listing.currency ?? 'RUB')}
           </div>
           <div className="mt-0.5 line-clamp-2 min-h-10 text-sm leading-body text-textPrimary">{listing.title}</div>
           <div className="muted-xs mt-1.5 flex items-center justify-between gap-2">

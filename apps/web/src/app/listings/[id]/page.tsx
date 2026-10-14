@@ -260,6 +260,20 @@ export default function ListingPage() {
               </div>
             )}
 
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              {listing.condition && (
+                <span className="badge-blue">
+                  {listing.condition === 'NEW' ? 'Новый' : 'Б/у'}
+                </span>
+              )}
+              {listing.handover && (
+                <span className="badge-gray">
+                  {listing.handover === 'PICKUP' ? 'Самовывоз' : 'Доставка'}
+                </span>
+              )}
+              <span className="badge-green">Безопасная сделка · эскроу</span>
+            </div>
+
             <div className="mt-6">
               {attrCount > 0 ? (
                 <>
