@@ -1,9 +1,7 @@
 export const CURSOR_PAGE_SIZE = 20;
-export const MAX_PAGE_SIZE = 50;
 
 export const LISTING_IMAGE_LIMIT = 20;
 export const MESSAGE_LENGTH_LIMIT = 2000;
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export const ALLOWED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp'] as const;
 
@@ -45,7 +43,14 @@ export const expiredHoldCancelIdempotencyKey = (orderId: string) => `expired-can
 export const MIN_PASSWORD_LENGTH = 8;
 export const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
 
-export const MODERATION_BLOCKED_KEYWORDS = [
+// Аудит п.16: список настраиваемый — env MODERATION_BLOCKED_KEYWORDS
+// (через запятую) ДОПОЛНЯЕТ базовый список без пересборки (работает и в API,
+// и в воркере: оба зовут findBlockedKeyword).
+// Из базы убраны ложно срабатывавшие «автомат», «паспорт», «ставк»:
+// они не блокируют сами по себе («автоматическая коробка», «паспорт стола»,
+// «ставка» — обычные объявления). Спам-связки с финансами ловит отдельная
+// эвристика moderateListingContent (ссылки + обещания дохода).
+const BASE_MODERATION_BLOCKED_KEYWORDS = [
   'наркотик',
   'наркота',
   'мефедрон',
@@ -53,20 +58,27 @@ export const MODERATION_BLOCKED_KEYWORDS = [
   'бомба',
   'оружие',
   'пистолет',
-  'автомат',
   'детская порнограф',
   'порно с детьми',
   'проституц',
   'эскорт',
   'казино',
-  'ставк',
   'фейк',
   'подделка',
   'украден',
   'ворован',
-  'паспорт',
   'диплом купить',
 ] as const;
+
+/** Базовый список + пользовательские ключевые слова из env. */
+export function moderationBlockedKeywords(): string[] {
+  const extra = (typeof process !== 'undefined' ? process.env.MODERATION_BLOCKED_KEYWORDS : '') ?? '';
+  const custom = extra
+    .split(',')
+    .map((k) => k.trim().toLowerCase())
+    .filter(Boolean);
+  return [...BASE_MODERATION_BLOCKED_KEYWORDS, ...custom];
+}
 
 /**
  * Первое запрещённое ключевое слово в тексте или null.
@@ -75,10 +87,13 @@ export const MODERATION_BLOCKED_KEYWORDS = [
  * ловил «ставк» внутри «доставка» и отклонял обычные объявления про доставку.
  * Окончания слова при этом ловятся («наркотик» → «наркотики»), потому что
  * проверяется только символ перед найденным вхождением.
+ *
+ * @param keywords переопределение списка (для тестов); по умолчанию —
+ *                 moderationBlockedKeywords() (env + база).
  */
-export function findBlockedKeyword(text: string): string | null {
+export function findBlockedKeyword(text: string, keywords?: readonly string[]): string | null {
   const lower = text.toLowerCase();
-  for (const keyword of MODERATION_BLOCKED_KEYWORDS) {
+  for (const keyword of keywords ?? moderationBlockedKeywords()) {
     let from = 0;
     let idx = lower.indexOf(keyword, from);
     while (idx !== -1) {

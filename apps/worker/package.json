@@ -20,13 +20,12 @@
     "bullmq": "^5.26.0",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
-    "nodemailer": "^9.1.0",
+    "nodemailer": "^10.0.9",
     "pino": "^9.5.0",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/node": "^22.8.0",
-    "@types/nodemailer": "^8.0.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"

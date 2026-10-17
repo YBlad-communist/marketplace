@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
-import { ZodTypeAny, z } from 'zod';
+import { ZodTypeAny } from 'zod';
 import { zodToAppError } from '@marketplace/shared';
 
 type Location = 'body' | 'query' | 'params';
@@ -17,12 +17,3 @@ export function validate(schema: ZodTypeAny, location: Location = 'body') {
     next();
   };
 }
-
-/** Формат «массив ошибок» для совместимости */
-export const errorResponseSchema = z.object({
-  error: z.object({
-    code: z.string(),
-    message: z.string(),
-    fields: z.record(z.string(), z.string()).optional(),
-  }),
-});

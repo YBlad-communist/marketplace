@@ -31,15 +31,20 @@ export async function processImageJob(data: ImageJobData): Promise<void> {
     const buffer = Buffer.concat(chunks);
     if (buffer.length === 0) return;
 
-    const image = sharp(buffer, { failOn: 'error' });
+    // П.22 аудита: limitInputPixels не даёт sharp аллоцировать память под
+    // гигантские декодированные картинки; failOn='error' — не зомбировать
+    // джобу на тривиальных повреждениях.
+    const image = sharp(buffer, { failOn: 'error', limitInputPixels: 25_000_000 });
     const meta = await image.metadata();
     if (!meta.format || !['jpeg', 'png', 'webp'].includes(meta.format)) {
       throw new Error('unsupported format');
     }
 
-    const base = key.replace(/\.[a-z0-9]+$/i, '');
-    const fullKey = `${base}.webp`;
-    const thumbKey = `${base}_thumb.webp`;
+    // Итоговые ключи — images/ (не raw/): cleanupOrphanedUploads сносит
+    // всё под raw/ старше 48ч, готовые фото не должны туда попадать.
+    const id = key.replace(/\.[a-z0-9]+$/i, '').replace(/^.*\//, '');
+    const fullKey = `images/${id}.webp`;
+    const thumbKey = `images/${id}_thumb.webp`;
 
     const [full, thumb] = await Promise.all([
       image.clone().rotate().resize({ width: 1600, height: 1600, fit: 'inside' }).webp({ quality: 82 }).withMetadata({ orientation: undefined }).toBuffer(),
@@ -50,7 +55,11 @@ export async function processImageJob(data: ImageJobData): Promise<void> {
       client.send(new PutObjectCommand({ Bucket: bucket, Key: fullKey, Body: full, ContentType: 'image/webp' })),
       client.send(new PutObjectCommand({ Bucket: bucket, Key: thumbKey, Body: thumb, ContentType: 'image/webp' })),
     ]);
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })).catch(() => undefined);
+    // Исходник удаляем только если его ключ не совпал с итоговыми
+    // (иначе удалили бы только что сохранённый файл).
+    if (key !== fullKey && key !== thumbKey) {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })).catch(() => undefined);
+    }
 
     const fullMeta = await sharp(full).metadata();
     const listingImage = await prisma.listingImage.findFirst({ where: { key } });

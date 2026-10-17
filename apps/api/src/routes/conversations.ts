@@ -117,20 +117,23 @@ router.delete('/:id/messages/:messageId', authenticate, async (req, res, next) =
 
 router.delete('/:id', authenticate, async (req, res, next) => {
   try {
-    const { participantIds, imageKeys } = await deleteConversation(req.params.id, req.userId!);
-    try {
-      const io = getIO();
-      io.to(`room:${req.params.id}`).emit('conversation:deleted', { conversationId: req.params.id });
-      for (const otherId of participantIds.filter((p) => p !== req.userId)) {
-        io.to(`user:${otherId}`).emit('conversation:deleted', { conversationId: req.params.id });
+    const { participantIds, imageKeys, hardDeleted } = await deleteConversation(req.params.id, req.userId!);
+    // П.30: сокет-эмитт «чат удалён» — только при hard delete (оба скрыли).
+    if (hardDeleted) {
+      try {
+        const io = getIO();
+        io.to(`room:${req.params.id}`).emit('conversation:deleted', { conversationId: req.params.id });
+        for (const otherId of participantIds.filter((p) => p !== req.userId)) {
+          io.to(`user:${otherId}`).emit('conversation:deleted', { conversationId: req.params.id });
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
+      if (imageKeys.length > 0) {
+        await enqueueS3Delete(imageKeys).catch(() => undefined);
+      }
     }
-    if (imageKeys.length > 0) {
-      await enqueueS3Delete(imageKeys).catch(() => undefined);
-    }
-    res.json({ data: { success: true } });
+    res.json({ data: { success: true, hardDeleted } });
   } catch (err) {
     next(err);
   }

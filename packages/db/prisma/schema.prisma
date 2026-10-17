@@ -280,6 +280,8 @@ model ConversationParticipant {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user           User         @relation(fields: [userId], references: [id])
   lastReadAt     DateTime?
+  // П.30: мягкое скрытие чата для инициатора; hard delete — когда скрыли оба.
+  hiddenAt       DateTime?
 
   @@id([conversationId, userId])
   @@index([userId, lastReadAt])
@@ -292,6 +294,8 @@ model Message {
   senderId       String
   sender         User         @relation("sender", fields: [senderId], references: [id])
   text           String
+  // П.31: оригинальный текст сохраняется при первой правке (история).
+  originalText   String?
   editedAt       DateTime?
   imageKey       String?
   imageThumbKey  String?
@@ -299,6 +303,11 @@ model Message {
   deletedAt      DateTime?
 
   @@index([conversationId, createdAt])
+  // П.20 аудита: прокси /api/files ищет сообщение по ключу фото, чтобы
+  // отдать приватный файл только участникам диалога — без индексов
+  // каждый GET картинки превращался бы в seq scan по растущей таблице.
+  @@index([imageKey])
+  @@index([imageThumbKey])
 }
 
 model Order {

@@ -52,11 +52,6 @@ export const markReadSchema = z.object({
   conversationId: z.string().cuid().optional(),
 });
 
-export const typingSchema = z.object({
-  conversationId: z.string().cuid(),
-  isTyping: z.boolean(),
-});
-
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 export type EditMessageInput = z.infer<typeof editMessageSchema>;
 export type CreateConversationInput = z.infer<typeof createConversationSchema>;

@@ -8,6 +8,20 @@ function required(name: string, fallback?: string): string {
   return value;
 }
 
+const isProdEnv = (process.env.NODE_ENV ?? 'development') === 'production';
+
+/**
+ * Audit 35: minioadmin is only a local-dev fallback. In production a missing
+ * value (or the literal minioadmin) fails fast at startup.
+ */
+function s3Secret(name: string): string {
+  const value = process.env[name] ?? '';
+  if (isProdEnv && (!value || value === 'minioadmin')) {
+    throw new Error(`${name} is required in production (minioadmin fallback is disabled)`);
+  }
+  return value || 'minioadmin';
+}
+
 export const env = {
   REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6379',
   DATABASE_URL: required('DATABASE_URL'),
@@ -18,8 +32,8 @@ export const env = {
   S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://localhost:9000',
   S3_REGION: process.env.S3_REGION ?? 'auto',
   S3_BUCKET: process.env.S3_BUCKET ?? 'marketplace',
-  S3_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY_ID ?? 'minioadmin',
-  S3_SECRET_ACCESS_KEY: process.env.S3_SECRET_ACCESS_KEY ?? 'minioadmin',
+  S3_ACCESS_KEY_ID: s3Secret('S3_ACCESS_KEY_ID'),
+  S3_SECRET_ACCESS_KEY: s3Secret('S3_SECRET_ACCESS_KEY'),
   S3_PUBLIC_BASE_URL: process.env.S3_PUBLIC_BASE_URL ?? 'http://localhost:9000/marketplace',
   S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE !== 'false',
   LOG_LEVEL: process.env.LOG_LEVEL ?? 'info',

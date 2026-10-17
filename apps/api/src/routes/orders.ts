@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '@marketplace/db';
-import { env } from '../config.js';
+import { filesBaseUrl } from '../config.js';
 import {
   createOrderSchema,
   orderDisputeSchema,
@@ -12,6 +12,7 @@ import {
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
+import { userRateLimit } from '../middleware/rateLimit.js';
 import {
   createEscrowOrder,
   ensureSellerYookassa,
@@ -26,30 +27,49 @@ import { getPaymentProvider } from '../services/payments/index.js';
 
 const router: Router = Router();
 
-router.post('/', authenticate, validate(createOrderSchema), async (req, res, next) => {
-  try {
-    const { confirmationToken, payUrl, order } = await createEscrowOrder({
-      listingId: req.body.listingId,
-      buyerId: req.userId!,
-      idempotencyKey: req.body.idempotencyKey,
-    });
-    res.status(201).json({
-      data: {
-        order: {
-          id: order.id,
-          status: order.status,
-          amount: Number(order.amount),
-          currency: order.currency,
+// Аудит п.8: не более 5 созданий заказа в минуту на пользователя.
+router.post(
+  '/',
+  authenticate,
+  userRateLimit('orders:create', 60_000, 5),
+  validate(createOrderSchema),
+  async (req, res, next) => {
+    try {
+      // Аудит п.8: покупать может только пользователь с подтверждённым телефоном.
+      const buyer = await prisma.user.findUnique({
+        where: { id: req.userId! },
+        select: { phoneVerifiedAt: true },
+      });
+      if (!buyer?.phoneVerifiedAt) {
+        throw new AppError(
+          errorCodes.FORBIDDEN,
+          'Подтвердите номер телефона в профиле, чтобы покупать',
+          403
+        );
+      }
+      const { confirmationToken, payUrl, order } = await createEscrowOrder({
+        listingId: req.body.listingId,
+        buyerId: req.userId!,
+        idempotencyKey: req.body.idempotencyKey,
+      });
+      res.status(201).json({
+        data: {
+          order: {
+            id: order.id,
+            status: order.status,
+            amount: Number(order.amount),
+            currency: order.currency,
+          },
+          // confirmation_token — виджет ЮKassa; pay_url — редирект Монеты.
+          confirmationToken,
+          payUrl,
         },
-        // confirmation_token — виджет ЮKassa; pay_url — редирект Монеты.
-        confirmationToken,
-        payUrl,
-      },
-    });
-  } catch (err) {
-    next(err);
+      });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 router.get('/', authenticate, async (req, res, next) => {
   try {
@@ -125,7 +145,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
     const dispute = order.dispute
       ? {
           ...order.dispute,
-          photos: order.dispute.photos.map((k) => (k.startsWith('http') ? k : `${env.S3_PUBLIC_BASE_URL}/${k}`)),
+          photos: order.dispute.photos.map((k) => (k.startsWith('http') ? k : `${filesBaseUrl}/${k}`)),
         }
       : null;
     res.json({

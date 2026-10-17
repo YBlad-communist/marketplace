@@ -6,6 +6,15 @@ overrides:
   postcss: ^8.5.25
   nanoid: ^3.3.19
   qs: ^6.16.0
+  # Аудит п.38 — фиксим транзитивные уязвимости (pnpm audit: 0 high/critical):
+  # critical: IP spoofing через IPv4-mapped IPv6 (express → proxy-addr).
+  proxy-addr: ^2.0.8
+  # high: DoS по расхождению protocol revision (socket.io → engine.io).
+  engine.io: ^6.6.11
+  # high: event-loop DoS (next → postcss → source-map-js).
+  source-map-js: ^1.2.2
+  # high: CVE в librsvg (sharp: прямая зависимость api/worker и next).
+  sharp: ^0.35.5
 
 allowBuilds:
   '@prisma/client': true

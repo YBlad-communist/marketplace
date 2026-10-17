@@ -13,14 +13,21 @@ import {
   errorCodes,
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
-import { authenticate, extractTokenFromCookie } from '../middleware/auth.js';
+import {
+  authenticate,
+  extractBearer,
+  extractTokenFromCookie,
+  optionalAuthenticate,
+} from '../middleware/auth.js';
 import { ipRateLimit } from '../middleware/rateLimit.js';
 import { requireCaptcha } from '../middleware/captcha.js';
 import * as authService from '../services/authService.js';
 import {
+  blacklistAccessToken,
   findSessionFamilyByToken,
   getActiveSessions,
   revokeSessionFamily,
+  verifyAccessToken,
 } from '../services/tokenService.js';
 import { refreshCookieName, refreshCookieOptions, clearRefreshCookieOptions } from '../lib/cookies.js';
 import { logSecurityEvent } from '../lib/logger.js';
@@ -94,8 +101,20 @@ router.post('/refresh', ipRateLimit('auth:refresh', 60_000, 30), async (req, res
   }
 });
 
-router.post('/logout', async (req, res, next) => {
+router.post('/logout', optionalAuthenticate, async (req, res, next) => {
   try {
+    // П.29: отзываем refresh-сессию и гасим текущий access-токен в blacklist,
+    // чтобы «выйти» означало реальный выход, а не жизнь до TTL access-токена.
+    const access = extractBearer(req);
+    if (access) {
+      try {
+        const payload = verifyAccessToken(access);
+        const ttlSeconds = Math.max(1, Math.floor((payload.exp ?? 0) - Date.now() / 1000));
+        await blacklistAccessToken(payload.jti, ttlSeconds);
+      } catch {
+        // просроченный/битый access-токен blacklist не нужен
+      }
+    }
     const token = extractTokenFromCookie(req, refreshCookieName) ?? (typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : undefined);
     await authService.logout(token);
     if (req.userId) logSecurityEvent('logout', { userId: req.userId });

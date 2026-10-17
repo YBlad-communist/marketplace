@@ -22,7 +22,8 @@ import { resolveDispute } from '../services/paymentService.js';
 import { deleteAccountByAdmin } from '../services/accountService.js';
 import { logSecurityEvent } from '../lib/logger.js';
 import { getRedis } from '../lib/redis.js';
-import { env } from '../config.js';
+import { disconnectUserSockets } from '../lib/socket.js';
+import { filesBaseUrl } from '../config.js';
 
 const router: Router = Router();
 
@@ -356,6 +357,8 @@ router.post('/users/:id/ban', validate(adminBanSchema), async (req, res, next) =
         where: { userId: user.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      // П.28: живые вкладки забаненного отключаем сразу.
+      await disconnectUserSockets(user.id);
     }
     logSecurityEvent('user_banned', { userId: user.id, banned: req.body.banned, admin: req.userId });
     res.json({ data: { success: true } });
@@ -415,7 +418,7 @@ router.get('/disputes', async (req, res, next) => {
       data: {
         disputes: disputes.map((d) => ({
           ...d,
-          photos: d.photos.map((k) => (k.startsWith('http') ? k : `${env.S3_PUBLIC_BASE_URL}/${k}`)),
+          photos: d.photos.map((k) => (k.startsWith('http') ? k : `${filesBaseUrl}/${k}`)),
           order: { ...d.order, amount: Number(d.order.amount) },
         })),
       },

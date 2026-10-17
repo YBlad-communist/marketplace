@@ -55,7 +55,14 @@ export const listingUpdateSchema = listingCreateSchema
   });
 
 export const listingQuerySchema = z.object({
-  q: z.string().trim().max(200).optional(),
+  // Аудит п.15: длинный поисковый запрос обрезаем до 100 символов, а не
+  // отклоняем (лимит защиты от перебора, не UX-валидация).
+  q: z
+    .string()
+    .trim()
+    .max(500, 'Слишком длинный запрос')
+    .optional()
+    .transform((v) => (v ? v.slice(0, 100) : v)),
   category: z.string().cuid().optional(),
   // Новые иерархические фильтры (старые category/city сохранены для совместимости):
   // categoryId ищет включая всех потомков, regionId — по всем городам региона.
@@ -91,10 +98,6 @@ export const listingQuerySchema = z.object({
   favoritesOf: z.string().cuid().optional(),
 });
 
-export const listingIdSchema = z.object({
-  id: z.string().cuid(),
-});
-
 export const imagePresignSchema = z.object({
   listingId: z.string().cuid().optional(),
   // Scope изолирует presign-сеты в Redis: листинг/аватар/чат не должны
@@ -114,10 +117,6 @@ export const createImagesDoneSchema = z.object({
       })
     )
     .max(LISTING_IMAGE_LIMIT),
-});
-
-export const favoriteSchema = z.object({
-  listingId: z.string().cuid(),
 });
 
 export type ListingCreateInput = z.infer<typeof listingCreateSchema>;

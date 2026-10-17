@@ -4,6 +4,11 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(4000),
+  // Аудит п.33: адрес(bind) слушания API. По умолчанию 127.0.0.1 — на хосте
+  // API доступен только локальному nginx. В контейнере (Dockerfile задаёт
+  // HOST=0.0.0.0) слушаем все интерфейсы внутри сети контейнера, а публикация
+  // порта в docker-compose привязана к 127.0.0.1 хоста.
+  HOST: z.string().default('127.0.0.1'),
   APP_URL: z.string().url().default('http://localhost:3000'),
   API_URL: z.string().url().default('http://localhost:4000'),
 
@@ -132,8 +137,57 @@ const envSchema = z.object({
 
 export const env = envSchema.parse(process.env);
 
+/**
+ * Аудит п.33/п.35: в production падаем при старте, если окружение осталось
+ * «девским»: небезопасные куки, шаблонные JWT-секреты, дефолтные S3-креды
+ * minioadmin или включённый обход проверки IP вебхуков ЮKassa.
+ * Вынесено в отдельную функцию, чтобы юнит-тесты могли проверять правила.
+ */
+export function assertProductionEnvSafety(e: {
+  NODE_ENV: string;
+  COOKIE_SECURE?: boolean;
+  JWT_ACCESS_SECRET: string;
+  JWT_REFRESH_SECRET: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  YOOKASSA_INSECURE_WEBHOOKS?: boolean;
+}): void {
+  if (e.NODE_ENV !== 'production') return;
+  const problems: string[] = [];
+  if (e.COOKIE_SECURE !== true) {
+    problems.push('COOKIE_SECURE=true (refresh-куки должны отдаваться только по HTTPS)');
+  }
+  if (e.JWT_ACCESS_SECRET.includes('CHANGE_ME') || e.JWT_REFRESH_SECRET.includes('CHANGE_ME')) {
+    problems.push('JWT_ACCESS_SECRET/JWT_REFRESH_SECRET заменены на сгенерированные (openssl rand -base64 48) и не содержат CHANGE_ME');
+  }
+  if (
+    !e.S3_ACCESS_KEY_ID ||
+    !e.S3_SECRET_ACCESS_KEY ||
+    e.S3_ACCESS_KEY_ID === 'minioadmin' ||
+    e.S3_SECRET_ACCESS_KEY === 'minioadmin'
+  ) {
+    problems.push('S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY заданы и не равны minioadmin');
+  }
+  if (e.YOOKASSA_INSECURE_WEBHOOKS === true) {
+    problems.push('YOOKASSA_INSECURE_WEBHOOKS выключен (проверка IP вебхуков ЮKassa обязательна)');
+  }
+  if (problems.length > 0) {
+    throw new Error(`Небезопасная конфигурация production (падаем при старте):\n - ${problems.join('\n - ')}`);
+  }
+}
+
+assertProductionEnvSafety(env);
+
+/**
+ * База для раздачи файлов через приватный прокси /api/files (п.20 аудита):
+ * бакет приватен (анонимный download-policy убран), картинки отдаем через API
+ * с проверкой доступа. API_URL бывает «.../api» (прод) или без суффикса
+ * (дев) — нормализуем, чтобы в обоих случаях получался <origin>/api/files.
+ */
+const apiUrlBase = env.API_URL.replace(/\/+$/, '');
+export const filesBaseUrl = `${apiUrlBase}${apiUrlBase.endsWith('/api') ? '' : '/api'}/files`;
+
 export const isProd = env.NODE_ENV === 'production';
-export const isTest = env.NODE_ENV === 'test';
 
 /**
  * Комиссия платформы в базисных пунктах (200 = 2%).

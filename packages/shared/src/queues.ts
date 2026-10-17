@@ -40,6 +40,7 @@ export const MAINTENANCE_JOBS = {
   RECOVER_RELEASING: 'recover-stuck-releasing',
   SEND_OFFLINE_DIGEST: 'send-offline-digest',
   CLEANUP_ORPHANED_UPLOADS: 'cleanup-orphaned-uploads',
+  CLEANUP_STALE_PENDING_ORDERS: 'cleanup-stale-pending-orders',
 } as const;
 
 export const S3_JOBS = {

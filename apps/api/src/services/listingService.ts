@@ -2,7 +2,42 @@ import { prisma, Prisma, ListingStatus } from '@marketplace/db';
 import { AppError, errorCodes, ListingQueryInput, CURSOR_PAGE_SIZE } from '@marketplace/shared';
 import { getRedis } from '../lib/redis.js';
 
-const listingInclude = {
+/**
+ * Аудит п.13: точные адрес/координаты публикуются всем зрителям, только если
+ * это задумано продуктом. false — address/lat/lng видит только владелец и
+ * модераторы (публичной остаётся грубая геолокация: город/регион).
+ */
+const EXACT_LOCATION_PUBLIC = true;
+
+/**
+ * Аудит п.13: явный select вместо include — moderationNote (внутренняя заметка
+ * модерации) не попадает в публичные ответы по умолчанию.
+ */
+const listingScalars = {
+  id: true,
+  title: true,
+  description: true,
+  price: true,
+  currency: true,
+  status: true,
+  sellerId: true,
+  categoryId: true,
+  city: true,
+  cityId: true,
+  address: true,
+  lat: true,
+  lng: true,
+  condition: true,
+  handover: true,
+  attributes: true,
+  viewsCount: true,
+  createdAt: true,
+  updatedAt: true,
+  // moderationNote и searchTs (Unsupported) сюда не входят: заметка отдаётся
+  // только владельцу/модератору в GET /:id, а tsvector Prisma не читает.
+} as const;
+
+const listingRelationSelect = {
   images: { orderBy: { position: 'asc' as const }, select: { id: true, url: true, thumbUrl: true, position: true } },
   seller: {
     select: {
@@ -24,9 +59,19 @@ const listingInclude = {
       region: { select: { id: true, name: true, slug: true } },
     },
   },
-};
+} as const;
+
+const listingSelect = { ...listingScalars, ...listingRelationSelect };
 
 type SearchRow = { id: string; rank: number };
+
+/**
+ * Аудит п.15: экранирование LIKE-метасимволов (`%`, `_`, `\`) в ILIKE-шаблоне.
+ * Без него запрос `q=%` превращался в wildcard и отдавал всю выборку.
+ */
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
 
 interface SortOptions {
   field: 'createdAt' | 'price';
@@ -105,10 +150,13 @@ function buildWhereSync(input: ListingQueryInput): Prisma.ListingWhereInput {
   // возвращал всё. AND-группа не конфликтует с OR (категория).
   const term = input.q?.trim();
   if (term) {
+    // Аудит п.15: экранируем %, _, \ — Prisma не экранирует их сам
+    // (проверено: contains:'%' матчил все строки).
+    const escaped = escapeLike(term);
     const textCond: Prisma.ListingWhereInput = {
       OR: [
-        { title: { contains: term, mode: 'insensitive' } },
-        { description: { contains: term, mode: 'insensitive' } },
+        { title: { contains: escaped, mode: 'insensitive' } },
+        { description: { contains: escaped, mode: 'insensitive' } },
       ],
     };
     const baseAnd = where.AND ? (Array.isArray(where.AND) ? where.AND : [where.AND]) : [];
@@ -197,8 +245,8 @@ async function textSearchIds(
     Prisma.sql`("Listing"."status"::text IN (${Prisma.join(statuses.map((s) => Prisma.sql`${s}`), ', ')}))`,
     Prisma.sql`(
       "Listing"."searchTs" @@ plainto_tsquery('simple', ${q})
-      OR "Listing"."title" ILIKE ${'%' + q + '%'}
-      OR "Listing"."description" ILIKE ${'%' + q + '%'}
+      OR "Listing"."title" ILIKE ${'%' + escapeLike(q) + '%'}
+      OR "Listing"."description" ILIKE ${'%' + escapeLike(q) + '%'}
     )`,
   ];
   if (input.category) {
@@ -281,7 +329,7 @@ export async function searchListings(input: ListingQueryInput, viewerId?: string
     }
     const listings = await prisma.listing.findMany({
       where: { id: { in: ids } },
-      include: listingInclude,
+      select: listingSelect,
     });
     const byId = new Map(listings.map((l) => [l.id, l]));
     const items = ids.map((id) => byId.get(id)).filter((l): l is NonNullable<typeof l> => Boolean(l));
@@ -324,7 +372,7 @@ export async function searchListings(input: ListingQueryInput, viewerId?: string
       where: cursorWhere,
       orderBy,
       take: limit + 1,
-      include: listingInclude,
+      select: listingSelect,
     }),
     prisma.listing.count({ where }),
   ]);
@@ -352,7 +400,7 @@ async function favoriteSet(userId: string, listingIds: string[]): Promise<Set<st
 }
 
 function serializeListing(
-  listing: Prisma.ListingGetPayload<{ include: typeof listingInclude }>,
+  listing: Prisma.ListingGetPayload<{ select: typeof listingSelect }>,
   favorites: Set<string>
 ) {
   const { seller, ...rest } = listing;
@@ -368,9 +416,18 @@ function serializeListing(
   };
 }
 
-export function listingByIdInclude(favorites = new Set<string>()) {
+/**
+ * Явный select для карточки объявления (п.13): moderationNote отдаётся только
+ * владельцу/модераторам, internal S3-ключ (key) клиенту не нужен.
+ */
+export function listingDetailSelect(includeModerationNote: boolean) {
   return {
-    images: { orderBy: { position: 'asc' as const } },
+    ...listingScalars,
+    ...(includeModerationNote ? { moderationNote: true } : {}),
+    images: {
+      orderBy: { position: 'asc' as const },
+      select: { id: true, url: true, thumbUrl: true, width: true, height: true, position: true },
+    },
     seller: {
       select: {
         id: true,
@@ -397,7 +454,6 @@ export function listingByIdInclude(favorites = new Set<string>()) {
         region: { select: { id: true, name: true, slug: true } },
       },
     },
-    favoritedBy: true,
   };
 }
 
@@ -425,12 +481,21 @@ export async function recordView(listingId: string, viewerId?: string, ip?: stri
   }
 }
 
-export async function getListingById(listingId: string, viewerId?: string, ip?: string) {
+export async function getListingById(listingId: string, viewerId?: string, ip?: string, role?: string) {
+  // Внутри читаем moderationNote (решение о видимости принимаем ниже), но в
+  // ответ попадает только при isOwner/isStaff (п.13).
   const listing = await prisma.listing.findUnique({
     where: { id: listingId },
-    include: listingByIdInclude(),
+    select: listingDetailSelect(true),
   });
   if (!listing) {
+    throw new AppError(errorCodes.NOT_FOUND, 'Объявление не найдено', 404);
+  }
+  const isOwner = !!viewerId && listing.sellerId === viewerId;
+  const isStaff = role === 'ADMIN' || role === 'MODERATOR';
+  // Аудит п.13: не-ACTIVE объявления не утекают чужакам (404, не 403 —
+  // чтобы не подтверждать существование скрытого объявления).
+  if (listing.status !== 'ACTIVE' && !isOwner && !isStaff) {
     throw new AppError(errorCodes.NOT_FOUND, 'Объявление не найдено', 404);
   }
   await recordView(listingId, viewerId, ip);
@@ -454,13 +519,12 @@ export async function getListingById(listingId: string, viewerId?: string, ip?: 
     },
   });
 
-  const { favoritedBy, ...rest } = listing;
-  return {
+  const { moderationNote, ...rest } = listing;
+  const response: Record<string, unknown> = {
     ...rest,
     price: Number(rest.price),
     viewsCount: Number(rest.viewsCount),
     isFavorite,
-    favoritedBy: undefined,
     seller: { ...listing.seller, rating: Number(listing.seller.rating) },
     similar: similar.map((s) => ({
       id: s.id,
@@ -473,4 +537,12 @@ export async function getListingById(listingId: string, viewerId?: string, ip?: 
       createdAt: s.createdAt,
     })),
   };
+  if (isOwner || isStaff) response.moderationNote = moderationNote;
+  // Аудит п.13: точные координаты/адрес публичны только при EXACT_LOCATION_PUBLIC.
+  if (!EXACT_LOCATION_PUBLIC && !isOwner && !isStaff) {
+    delete response.address;
+    delete response.lat;
+    delete response.lng;
+  }
+  return response;
 }

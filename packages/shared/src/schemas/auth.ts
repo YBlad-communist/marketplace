@@ -79,13 +79,16 @@ export const requestVerificationSchema = z.object({
   phone: phoneSchema.optional(),
 });
 
+// П.27 аудита: смена телефона подтверждается текущим паролем.
 export const phoneChangeRequestSchema = z.object({
   phone: phoneSchema,
+  password: z.string().min(1).max(72),
 });
 
 export const phoneChangeConfirmSchema = z.object({
   phone: phoneSchema,
   code: z.string().length(6).regex(/^\d{6}$/),
+  password: z.string().min(1).max(72),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

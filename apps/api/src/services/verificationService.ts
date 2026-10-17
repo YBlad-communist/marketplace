@@ -99,33 +99,62 @@ export async function createVerificationCode(data: {
   return code;
 }
 
+/** Ключ счётчика попыток подбора кода по (purpose, target). */
+export function verifyAttemptsKey(purpose: string, target: string): string {
+  return `verify:attempts:${purpose}:${target}`;
+}
+
+/** Погасить все активные коды по цели (превышено число попыток). */
+async function burnCodes(purpose: string, target: string): Promise<void> {
+  await prisma.verificationCode.updateMany({
+    where: { purpose, target, consumedAt: null },
+    data: { consumedAt: new Date() },
+  });
+}
+
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
+}
+
 export async function verifyCode(data: {
   userId?: string;
   purpose: 'EMAIL_VERIFY' | 'PHONE_VERIFY' | 'PASSWORD_RESET';
   target: string;
   code: string;
 }): Promise<{ userId: string }> {
+  const redis = getRedis();
+  const attemptsKey = verifyAttemptsKey(data.purpose, data.target);
+
+  // П.24: сначала атомарно считаем попытку (INCR — не read-modify-write),
+  // и только потом сравниваем сам код. Иначе параллельные запросы обходят лимит.
+  const attempts = await redis.incr(attemptsKey);
+  if (attempts === 1) {
+    await redis.expire(attemptsKey, Math.ceil(VERIFY_CODE_TTL_MS / 1000)).catch(() => undefined);
+  }
+  if (attempts > VERIFY_MAX_ATTEMPTS) {
+    await burnCodes(data.purpose, data.target);
+    throw new AppError(errorCodes.VALIDATION, 'Неверный или истёкший код', 400);
+  }
+
   const codeHash = crypto.createHash('sha256').update(data.code).digest('hex');
   const record = await prisma.verificationCode.findFirst({
     where: {
-      codeHash,
       purpose: data.purpose,
       target: data.target,
       consumedAt: null,
       expiresAt: { gt: new Date() },
       ...(data.userId ? { userId: data.userId } : {}),
     },
+    orderBy: { createdAt: 'desc' },
   });
-  if (!record) {
-    // защита от подбора: считаем неудачные попытки по цели
-    const redis = getRedis();
-    const attempts = await redis.incr(`verify:fail:${data.purpose}:${data.target}`);
-    await redis.expire(`verify:fail:${data.purpose}:${data.target}`, VERIFY_CODE_TTL_MS / 1000);
-    if (attempts >= VERIFY_MAX_ATTEMPTS) {
-      await prisma.verificationCode.updateMany({
-        where: { purpose: data.purpose, target: data.target, consumedAt: null },
-        data: { consumedAt: new Date() },
-      });
+  const ok = !!record && timingSafeEqualHex(record.codeHash, codeHash);
+  if (!record || !ok) {
+    // Счётчик неудач хранится и в записи VerificationCode (для аудита/расследований).
+    if (record) {
+      await prisma.verificationCode
+        .update({ where: { id: record.id }, data: { attempts: { increment: 1 } } })
+        .catch(() => undefined);
     }
     throw new AppError(errorCodes.VALIDATION, 'Неверный или истёкший код', 400);
   }
@@ -133,5 +162,6 @@ export async function verifyCode(data: {
     where: { id: record.id },
     data: { consumedAt: new Date() },
   });
+  await redis.del(attemptsKey).catch(() => undefined);
   return { userId: record.userId };
 }

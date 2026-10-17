@@ -49,6 +49,8 @@ export function initSocket(httpServer: http.Server): Server {
       const user = await prisma.user.findUnique({ where: { id: String(payload.sub) } });
       if (!user || user.isBanned) return next(new Error('unauthorized'));
       socket.data.userId = user.id;
+      // П.28: запоминаем exp токена — сокет отключается по истечении access-токена.
+      if (typeof payload.exp === 'number') socket.data.tokenExpMs = payload.exp * 1000;
       next();
     } catch {
       next(new Error('unauthorized'));
@@ -57,6 +59,15 @@ export function initSocket(httpServer: http.Server): Server {
 
   io.on('connection', async (socket) => {
     const userId = socket.data.userId as string;
+    // П.28: по истечении access-токена принудительно отключаем сокет —
+    // событийные обработчики не должны жить дольше токена.
+    const tokenExpMs = socket.data.tokenExpMs as number | undefined;
+    if (tokenExpMs) {
+      const expTimer = setTimeout(() => {
+        socket.disconnect(true);
+      }, Math.max(0, tokenExpMs - Date.now()) + 100);
+      socket.on('disconnect', () => clearTimeout(expTimer));
+    }
     // Счётчик подключений: несколько вкладок/устройств — один и тот же онлайн.
     // Снимаем с ws:online только на ПОСЛЕДНЕМ закрытии (декремент до нуля).
     await markConnected(userId);
@@ -65,6 +76,7 @@ export function initSocket(httpServer: http.Server): Server {
 
     socket.on('conversation:join', async (conversationId: string, cb?: (ok: boolean) => void) => {
       try {
+        if (!(await socketRateOk(userId, 'conversation:join'))) return cb?.(false);
         await assertParticipant(conversationId, userId);
         await socket.join(`room:${conversationId}`);
         cb?.(true);
@@ -106,6 +118,7 @@ export function initSocket(httpServer: http.Server): Server {
 
     socket.on('typing', async (payload: { conversationId: string; isTyping: boolean }) => {
       try {
+        if (!(await socketRateOk(userId, 'typing'))) return;
         await assertParticipant(payload.conversationId, userId);
         socket.to(`room:${payload.conversationId}`).emit('typing', {
           conversationId: payload.conversationId,
@@ -139,15 +152,19 @@ export function initSocket(httpServer: http.Server): Server {
           cb?.({ ok: false, error: 'Некорректный чат' });
           return;
         }
-        const { participantIds, imageKeys } = await deleteConversation(conversationId, userId);
-        socket.to(`room:${conversationId}`).emit('conversation:deleted', { conversationId });
-        for (const otherId of participantIds.filter((p) => p !== userId)) {
-          socket.to(`user:${otherId}`).emit('conversation:deleted', { conversationId });
+        const { participantIds, imageKeys, hardDeleted } = await deleteConversation(conversationId, userId);
+        // П.30: эмитим «чат удалён» остальным только при hard delete
+        // (оба скрыли); при мягком скрытии второй участник чат ещё видит.
+        if (hardDeleted) {
+          socket.to(`room:${conversationId}`).emit('conversation:deleted', { conversationId });
+          for (const otherId of participantIds.filter((p) => p !== userId)) {
+            socket.to(`user:${otherId}`).emit('conversation:deleted', { conversationId });
+          }
+          if (imageKeys.length > 0) {
+            await enqueueS3Delete(imageKeys).catch(() => undefined);
+          }
         }
-        if (imageKeys.length > 0) {
-          await enqueueS3Delete(imageKeys).catch(() => undefined);
-        }
-        cb?.({ ok: true });
+        cb?.({ ok: true, hardDeleted });
       } catch (err) {
         const e = err as AppError;
         cb?.({ ok: false, error: e.message ?? 'Не удалось удалить чат' });
@@ -170,6 +187,7 @@ export function initSocket(httpServer: http.Server): Server {
 
     socket.on('message:read', async (conversationId: string, cb) => {
       try {
+        if (!(await socketRateOk(userId, 'message:read'))) return cb?.(false);
         await markRead(conversationId, userId);
         socket.to(`room:${conversationId}`).emit('message:read', { conversationId, userId });
         cb?.(true);
@@ -189,6 +207,36 @@ export function initSocket(httpServer: http.Server): Server {
 export function getIO(): Server {
   if (!io) throw new Error('socket.io not initialized');
   return io;
+}
+
+/**
+ * П.28: принудительный disconnect всех сокетов пользователя
+ * (смена/сброс пароля, бан) — access-токены живых вкладок больше не годятся.
+ */
+export async function disconnectUserSockets(userId: string): Promise<void> {
+  if (!io) return;
+  try {
+    await io.in(`user:${userId}`).disconnectSockets();
+  } catch {
+    // сокет-сервер мог быть не инициализирован (юнит-тесты)
+  }
+}
+
+const WS_RATE_WINDOW_MS = 10_000;
+const WS_RATE_MAX = 30;
+
+/**
+ * П.28: Redis-rate-limit на socket-события (typing, conversation:join,
+ * message:read): 30 событий в 10 секунд на пользователя.
+ */
+async function socketRateOk(userId: string, action: string): Promise<boolean> {
+  const redis = getRedis();
+  const key = `ws:rl:${action}:${userId}:${Math.floor(Date.now() / WS_RATE_WINDOW_MS)}`;
+  const count = await redis.incr(key);
+  if (count === 1) {
+    await redis.expire(key, Math.ceil(WS_RATE_WINDOW_MS / 1000) + 1).catch(() => undefined);
+  }
+  return count <= WS_RATE_MAX;
 }
 
 async function participantsOf(conversationId: string): Promise<string[]> {

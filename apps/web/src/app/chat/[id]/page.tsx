@@ -185,7 +185,7 @@ export default function ChatConversationPage() {
       toast('История очищена локально', 'info');
     };
     const onDelete = () => {
-      if (!confirm('Удалить чат для обоих участников? Сообщения и фото будут удалены безвозвратно.')) return;
+      if (!confirm('Скрыть чат? Он исчезнет из вашего списка; история останется у собеседника, пока он тоже не удалит чат.')) return;
       const socket = connectSocket();
       socket.emit('conversation:delete', id, (res: { ok: boolean; error?: string }) => {
         if (res.ok) {

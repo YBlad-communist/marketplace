@@ -3,7 +3,7 @@ import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
-import { isInfraAvailable } from './helpers.js';
+import { isInfraAvailable, markPhoneVerified } from './helpers.js';
 import { installYookassaFake } from './yookassa-fake.js';
 import { handleYookassaNotification } from '../src/services/paymentService.js';
 
@@ -78,6 +78,7 @@ beforeAll(async () => {
   await request(app)
     .post('/api/auth/register')
     .send({ name: 'Покупатель-флоу', phone: buyerPhone, password, confirmPassword: password });
+  await markPhoneVerified(buyerPhone);
   const buyerLogin = await request(app).post('/api/auth/login').send({ phone: buyerPhone, password });
   buyerToken = buyerLogin.body.data.accessToken as string;
 
@@ -103,9 +104,16 @@ describeInfra('escrow flow (integration, mocked yookassa)', () => {
       .send({ listingId, idempotencyKey: `flow-${unique}-rebuy-dup` });
     expect(blocked.status).toBe(409);
 
-    const refund = await request(app)
+    // Аудит п.5: покупатель не возвращает оплаченный заказ сам — возврат
+    // из PAID делает только поддержка (здесь — админ).
+    const buyerSelfRefund = await request(app)
       .post(`/api/orders/${orderId}/refund`)
       .set('Authorization', `Bearer ${buyerToken}`);
+    expect(buyerSelfRefund.status).toBe(403);
+
+    const refund = await request(app)
+      .post(`/api/orders/${orderId}/refund`)
+      .set('Authorization', `Bearer ${adminToken}`);
     expect(refund.status).toBe(200);
     const refunded = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(refunded.status).toBe('REFUNDED');
@@ -144,7 +152,7 @@ describeInfra('escrow flow (integration, mocked yookassa)', () => {
     const refund = await request(app)
       .post(`/api/orders/${orderId}/refund`)
       .set('Authorization', `Bearer ${buyerToken}`);
-    expect(refund.status).toBe(409);
+    expect(refund.status).toBe(403);
 
     const again = await request(app)
       .post(`/api/orders/${orderId}/ship`)

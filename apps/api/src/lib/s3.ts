@@ -32,9 +32,9 @@ export interface PresignedUpload {
 
 function randomKey(extension: string): string {
   const id = cryptoRandom();
-  // Сырые загрузки живут отдельно под raw/: подтверждённые файлы после
-  // processImage получают другой ключ без префикса, а брошенные raw-объекты
-  // старше grace-периода сносит фоновая джоба cleanup-orphaned-uploads.
+  // Сырые загрузки живут отдельно под raw/: после processImage итоговые файлы
+  // пишутся в images/<id>.webp (см. deriveOutputKeys в imageService), поэтому
+  // чистка cleanup-orphaned-uploads (только raw/, 48ч) их не трогает.
   return `raw/${id}${extension}`;
 }
 
@@ -57,7 +57,12 @@ export async function createPresignedUpload(
     ContentType: mime,
     ContentLength: sizeBytes,
   });
-  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 60 * 15 });
+  // П.22 аудита: подписываем Content-Length — S3 сверит его с фактическим
+  // размером тела PUT, поэтому подменить размер после выдачи URL нельзя.
+  const uploadUrl = await getSignedUrl(client, command, {
+    expiresIn: 60 * 15,
+    signableHeaders: new Set(['content-length']),
+  });
   return {
     key,
     uploadUrl,
@@ -66,7 +71,16 @@ export async function createPresignedUpload(
   };
 }
 
-export async function getObjectBuffer(key: string): Promise<Buffer | null> {
+export async function getObjectBuffer(key: string, maxBytes?: number): Promise<Buffer | null> {
+  // П.22 аудита: если известен лимит — сначала HeadObject, и только потом
+  // скачивание: не тратим трафик/память на заведомо гигантский объект.
+  if (maxBytes !== undefined) {
+    const head = await headObject(key);
+    if (!head) return null;
+    if ((head.contentLength ?? 0) > maxBytes) {
+      throw new AppError(errorCodes.VALIDATION, 'Размер файла превышает лимит', 400);
+    }
+  }
   try {
     const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
     const body = res.Body;
@@ -77,6 +91,7 @@ export async function getObjectBuffer(key: string): Promise<Buffer | null> {
     }
     return Buffer.concat(chunks);
   } catch (err) {
+    if (err instanceof AppError) throw err;
     logger.warn({ err, key }, 's3 get failed');
     return null;
   }
@@ -102,7 +117,12 @@ export async function deleteObject(key: string): Promise<void> {
 const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 function checkKeySafe(key: string): void {
-  if ((!key.startsWith('listings/') && !key.startsWith('raw/')) || key.includes('..')) {
+  // images/ — итоговые обработанные файлы; raw/ — загрузки до подтверждения;
+  // listings/ — legacy-ключи старых записей. Всё остальное отвергаем.
+  if (
+    (!key.startsWith('listings/') && !key.startsWith('raw/') && !key.startsWith('images/')) ||
+    key.includes('..')
+  ) {
     throw new AppError(errorCodes.VALIDATION, 'Некорректный ключ объекта', 400);
   }
 }
@@ -110,11 +130,22 @@ function checkKeySafe(key: string): void {
 /** Проверка объекта после аплоада: размер, MIME и реальные габариты через sharp */
 export async function verifyImageObject(key: string, expectedSizeBytes?: number): Promise<{ width: number; height: number; mime: string }> {
   checkKeySafe(key);
-  const buf = await getObjectBuffer(key);
+  const limit = expectedSizeBytes ?? env.S3_MAX_IMAGE_BYTES;
+  // П.22 аудита: ContentLength проверяется через HeadObject ДО скачивания
+  // (см. getObjectBuffer с maxBytes); превысивший лимит удаляем сразу.
+  let buf: Buffer | null;
+  try {
+    buf = await getObjectBuffer(key, limit);
+  } catch (err) {
+    if (err instanceof AppError && err.message.includes('превышает лимит')) {
+      await deleteObject(key).catch(() => undefined);
+    }
+    throw err;
+  }
   if (!buf) {
     throw new AppError(errorCodes.VALIDATION, 'Объект не найден в хранилище', 400);
   }
-  const limit = expectedSizeBytes ?? env.S3_MAX_IMAGE_BYTES;
+  // Страховка: head/get могли разойтись (гонка удаления) — длину проверяем и тут.
   if (buf.length > limit) {
     await deleteObject(key).catch(() => undefined);
     throw new AppError(errorCodes.VALIDATION, 'Размер файла превышает лимит', 400);
@@ -126,7 +157,7 @@ export async function verifyImageObject(key: string, expectedSizeBytes?: number)
   }
   try {
     const { default: sharp } = await import('sharp');
-    const meta = await sharp(buf, { failOn: 'error' }).metadata();
+    const meta = await sharp(buf, { failOn: 'error', limitInputPixels: 25_000_000 }).metadata();
     if (!meta.width || !meta.height) {
       throw new AppError(errorCodes.VALIDATION, 'Не удалось определить размеры изображения', 400);
     }

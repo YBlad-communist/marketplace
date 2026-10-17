@@ -87,6 +87,16 @@ export async function enqueueOrphanedUploadsCleanup(): Promise<void> {
   });
 }
 
+/** Чистка брошенных PENDING-заказов старше 60 минут — раз в 15 минут. */
+export async function enqueueStalePendingOrdersCleanup(): Promise<void> {
+  await getQueue(QUEUES.MAINTENANCE).add(MAINTENANCE_JOBS.CLEANUP_STALE_PENDING_ORDERS, {}, {
+    repeat: { every: 15 * 60_000 },
+    jobId: 'stale-pending-orders-cleanup-repeat',
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 60_000 },
+  });
+}
+
 /**
  * Удаление объектов из S3 в фоне: ретраи BullMQ есть из коробки, поэтому
  * удаление переживает временные падения S3/MinIO, а ответ API не зависит от

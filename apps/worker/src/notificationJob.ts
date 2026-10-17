@@ -28,16 +28,36 @@ export async function savedSearchNotificationJob(data: NotificationJobData): Pro
   if (!matched) return;
 
   // Одно письмо на листинг, даже если совпало несколько сохранённых поисков.
+  // Аудит п.39: title/city объявления вставляем в plain-text только после
+  // очистки — иначе ссылка в названии превратилась бы в кликабельный URL
+  // в письме от имени площадки (фишинг).
+  const summary = sanitizeEmailPlainText(`${listing.title} — ${listing.price} ${listing.city ?? ''}`);
   await sendEmail({
     to: user.email,
     subject: 'Новое объявление по вашему поиску',
-    text: `${listing.title} — ${listing.price} ${listing.city ?? ''}\n${process.env.APP_URL ?? 'http://localhost:3000'}/listings/${listing.id}`,
+    text: `${summary}\n${process.env.APP_URL ?? 'http://localhost:3000'}/listings/${listing.id}`,
     template: 'new-message',
     templateData: {
       name: user.name,
-      preview: `${listing.title} — ${listing.price}`,
+      preview: summary,
     },
   });
+}
+
+/**
+ * Аудит п.39: очистка пользовательского текста для plain-text части письма.
+ * - управляющие символы (в т.ч. переводы строк) → пробелы;
+ * - множественные пробелы схлопываются;
+ * - URL дефангим (`://` → `[://]`, `www.` → `www[.]`), чтобы почтовые
+ *   клиенты не распознавали их как ссылки.
+ */
+export function sanitizeEmailPlainText(raw: string): string {
+  return raw
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/https?:\/\//gi, (m) => m.replace('://', '[://]'))
+    .replace(/\bwww\./gi, 'www[.]');
 }
 
 function matchesSearch(

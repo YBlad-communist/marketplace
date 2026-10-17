@@ -10,14 +10,15 @@ import {
   errorCodes,
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, extractTokenFromCookie } from '../middleware/auth.js';
 import { refreshCookieName, clearRefreshCookieOptions } from '../lib/cookies.js';
-import { publicUser } from '../services/authService.js';
+import { publicUser, assertCurrentPassword, revokeOtherSessions } from '../services/authService.js';
+import { findSessionFamilyByToken } from '../services/tokenService.js';
 import { deleteAccount } from '../services/accountService.js';
 import { assertOtpSendAllowed, createVerificationCode, verifyCode } from '../services/verificationService.js';
 import { enqueueSms } from '../services/notificationService.js';
-import { deleteObject, verifyImageObject } from '../lib/s3.js';
-import { processImage } from '../services/imageService.js';
+import { verifyImageObject } from '../lib/s3.js';
+import { processImage, deleteSourceAfterProcess } from '../services/imageService.js';
 import { getRedis } from '../lib/redis.js';
 
 const router: Router = Router();
@@ -49,7 +50,9 @@ router.patch('/me', authenticate, validate(usersMeUpdateSchema), async (req, res
 
 router.post('/me/phone/request', authenticate, validate(phoneChangeRequestSchema), async (req, res, next) => {
   try {
-    const { phone } = req.body;
+    const { phone, password } = req.body;
+    // П.27: подтверждение текущим паролем — SMS на номер нельзя слать «вслепую».
+    await assertCurrentPassword(req.userId!, password);
     const exists = await prisma.user.findFirst({ where: { phone, id: { not: req.userId } } });
     if (exists) {
       throw new AppError(errorCodes.CONFLICT, 'Этот телефон уже занят', 409);
@@ -70,12 +73,18 @@ router.post('/me/phone/request', authenticate, validate(phoneChangeRequestSchema
 
 router.post('/me/phone/confirm', authenticate, validate(phoneChangeConfirmSchema), async (req, res, next) => {
   try {
-    const { phone, code } = req.body;
+    const { phone, code, password } = req.body;
+    await assertCurrentPassword(req.userId!, password);
     await verifyCode({ userId: req.userId, purpose: 'PHONE_VERIFY', target: phone, code });
     const user = await prisma.user.update({
       where: { id: req.userId },
       data: { phone, phoneVerifiedAt: new Date() },
     });
+    // П.27: после смены телефона отзываем все остальные сессии
+    // (текущая, опознанная по refresh-cookie, остаётся).
+    const currentToken = extractTokenFromCookie(req, refreshCookieName);
+    const currentFamilyId = currentToken ? await findSessionFamilyByToken(currentToken) : null;
+    await revokeOtherSessions(req.userId!, currentFamilyId);
     res.json({ data: { user: publicUser(user) } });
   } catch (err) {
     next(err);
@@ -94,7 +103,7 @@ router.post('/me/avatar/confirm', authenticate, validate(avatarConfirmSchema), a
     await redis.srem(setKey, key);
     await verifyImageObject(key);
     const processed = await processImage(key);
-    await deleteObject(key);
+    await deleteSourceAfterProcess(key, processed);
     const user = await prisma.user.update({
       where: { id: req.userId },
       data: { avatarUrl: processed.publicUrl },

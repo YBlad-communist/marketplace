@@ -42,10 +42,6 @@ export function plural(n: number, forms: [string, string, string]): string {
   return forms[2];
 }
 
-export function fieldError(err: { fields?: Record<string, string> } | null, field: string): string | undefined {
-  return err?.fields?.[field];
-}
-
 function startOfDay(d: Date): Date {
   const c = new Date(d);
   c.setHours(0, 0, 0, 0);

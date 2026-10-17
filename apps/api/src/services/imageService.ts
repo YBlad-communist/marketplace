@@ -2,6 +2,7 @@ import sharp, { type Sharp } from 'sharp';
 import { PutObjectCommand, S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { env } from '../config.js';
 import { AppError, errorCodes } from '@marketplace/shared';
+import { deleteObject } from '../lib/s3.js';
 
 const client = new S3Client({
   endpoint: env.S3_ENDPOINT,
@@ -14,7 +15,6 @@ const client = new S3Client({
 });
 
 const bucket = env.S3_BUCKET;
-const ALLOWED = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 export interface ProcessedImage {
   fullKey: string;
@@ -26,13 +26,55 @@ export interface ProcessedImage {
   mime: string;
 }
 
+export type ImageScope = 'listing' | 'avatar' | 'chat';
+
+/**
+ * Итоговые ключи обработанного изображения.
+ *
+ * ЖЁСТКОЕ ПРАВИЛО: результат НИКОГДА не живёт под raw/ — иначе фоновая
+ * чистка cleanupOrphanedUploads (удаляет всё под raw/ старше 48ч) снесёт
+ * готовые фото.
+ *
+ * Префиксы (аудит п.20): фото объявлений/аватаров — images/<id>.webp
+ * (публичный префикс бакета), фото чатов — chat/<id>.webp (приватный
+ * префикс: отдаются только через /api/files участникам диалога).
+ *
+ * Важно для .webp-исходников: раньше base сохранял директорию исходника,
+ * fullKey совпадал с ключом загрузки, и deleteObject(исходник) удалял
+ * только что сохранённый файл (см. deleteSourceAfterProcess ниже).
+ */
+export function deriveOutputKeys(
+  sourceKey: string,
+  scope: ImageScope = 'listing'
+): { fullKey: string; thumbKey: string } {
+  // Отбрасываем расширение и ВСЕ директории: raw/xyz.jpg -> xyz.
+  const id = sourceKey.replace(/\.[a-z0-9]+$/i, '').replace(/^.*\//, '');
+  const dir = scope === 'chat' ? 'chat' : 'images';
+  return {
+    fullKey: `${dir}/${id}.webp`,
+    thumbKey: `${dir}/${id}_thumb.webp`,
+  };
+}
+
+/**
+ * Удаляет исходник (raw/…) после обработки — только если его ключ
+ * не совпал с итоговыми (защита от deleteObject готового файла).
+ */
+export async function deleteSourceAfterProcess(
+  sourceKey: string,
+  processed: Pick<ProcessedImage, 'fullKey' | 'thumbKey'>
+): Promise<void> {
+  if (sourceKey === processed.fullKey || sourceKey === processed.thumbKey) return;
+  await deleteObject(sourceKey);
+}
+
 /**
  * Забирает объект из S3, декодирует через sharp (защита от polyglot/изображение-вредонос),
  * удаляет EXIF/профиль, сохраняет перекодированную версию + миниатюру.
  */
 export async function processImage(
   key: string,
-  originalUrl?: string,
+  scope: ImageScope = 'listing',
   limitBytes = env.S3_MAX_IMAGE_BYTES
 ): Promise<ProcessedImage> {
   let buffer: Buffer;
@@ -53,7 +95,9 @@ export async function processImage(
 
   let image: Sharp;
   try {
-    image = sharp(buffer, { failOn: 'error' });
+    // limitInputPixels (п.22 аудита): не даём sharp аллоцировать память под
+    // гигантские декодированные картинки (дефолт — 268M пикселей).
+    image = sharp(buffer, { failOn: 'error', limitInputPixels: 25_000_000 });
     const meta = await image.metadata();
     const format = meta.format;
     if (!format || !['jpeg', 'png', 'webp'].includes(format)) {
@@ -77,9 +121,7 @@ export async function processImage(
       .toBuffer();
 
     const meta2 = await sharp(full).metadata();
-    const base = key.replace(/\.[a-z0-9]+$/i, '');
-    const fullKey = `${base}.webp`;
-    const thumbKey = `${base}_thumb.webp`;
+    const { fullKey, thumbKey } = deriveOutputKeys(key, scope);
 
     await Promise.all([
       client.send(new PutObjectCommand({ Bucket: bucket, Key: fullKey, Body: full, ContentType: 'image/webp' })),
@@ -100,6 +142,4 @@ export async function processImage(
   }
 }
 
-export function isAllowedMime(mime: string): boolean {
-  return ALLOWED.has(mime);
-}
+

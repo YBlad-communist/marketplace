@@ -3,7 +3,7 @@ import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
-import { isInfraAvailable } from './helpers.js';
+import { isInfraAvailable, markPhoneVerified } from './helpers.js';
 import { installYookassaFake } from './yookassa-fake.js';
 import { handleYookassaNotification } from '../src/services/paymentService.js';
 
@@ -39,6 +39,7 @@ beforeAll(async () => {
 
   const buyerPhone = `+7${Date.now().toString().slice(-9)}5`;
   await request(app).post('/api/auth/register').send({ name: 'Покупатель', phone: buyerPhone, password, confirmPassword: password });
+  await markPhoneVerified(buyerPhone);
   const buyer = await request(app).post('/api/auth/login').send({ phone: buyerPhone, password });
   buyerToken = buyer.body.data.accessToken;
 

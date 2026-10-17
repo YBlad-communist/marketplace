@@ -38,7 +38,7 @@ export function signAccessToken(userId: string, role: string): { token: string; 
   return { token, jti };
 }
 
-export function verifyAccessToken(token: string): AccessTokenPayload {
+export function verifyAccessToken(token: string): AccessTokenPayload & jwt.JwtPayload {
   try {
     const payload = jwt.verify(token, env.JWT_ACCESS_SECRET, {
       issuer: env.JWT_ISSUER,
@@ -202,6 +202,35 @@ export async function revokeAllUserSessions(userId: string): Promise<void> {
   });
   await prisma.refreshTokenFamily.updateMany({
     where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  await Promise.all(families.map((f) => revokeFamily(f.familyId)));
+}
+
+/**
+ * Отзыв ВСЕХ сессий пользователя, кроме текущей (п.27: смена телефона
+ * разлогинивает все остальные устройства, текущее остаётся авторизованным).
+ * currentFamilyId = null — отзываем все.
+ */
+export async function revokeOtherUserSessions(
+  userId: string,
+  currentFamilyId: string | null
+): Promise<void> {
+  const families = await prisma.refreshTokenFamily.findMany({
+    where: {
+      userId,
+      revokedAt: null,
+      ...(currentFamilyId ? { familyId: { not: currentFamilyId } } : {}),
+    },
+    select: { familyId: true },
+  });
+  if (families.length === 0) return;
+  await prisma.refreshTokenFamily.updateMany({
+    where: {
+      userId,
+      revokedAt: null,
+      ...(currentFamilyId ? { familyId: { not: currentFamilyId } } : {}),
+    },
     data: { revokedAt: new Date() },
   });
   await Promise.all(families.map((f) => revokeFamily(f.familyId)));

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '@marketplace/db';
+import { optionalAuthenticate, requireModeratorForAll } from '../middleware/auth.js';
 
 const router: Router = Router();
 
@@ -36,9 +37,10 @@ function buildTree(rows: FlatCategory[]) {
   return roots;
 }
 
-router.get('/', async (req, res, next) => {
+router.get('/', optionalAuthenticate, requireModeratorForAll, async (req, res, next) => {
   try {
-    // Публично — только активные; админка передаёт ?all=1 и видит всё.
+    // Публично — только активные; админка передаёт ?all=1 (MODERATOR/ADMIN,
+    // аудит п.39) и видит всё.
     const onlyActive = req.query.all !== '1';
     const categories = await prisma.category.findMany({
       where: onlyActive ? { isActive: true } : {},

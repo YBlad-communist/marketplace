@@ -1,6 +1,18 @@
 import { prisma } from '@marketplace/db';
 import { Redis } from 'ioredis';
 
+/**
+ * Пользователь, зарегистрированный через API, не имеет phoneVerifiedAt —
+ * аудит п.8 запрещает создание заказов без подтверждённого телефона.
+ * Вызывайте после register, чтобы интеграционные тесты заказов проходили.
+ */
+export async function markPhoneVerified(phone: string): Promise<void> {
+  await prisma.user.updateMany({
+    where: { phone },
+    data: { phoneVerifiedAt: new Date(), isVerified: true },
+  });
+}
+
 /** Проверка доступности инфраструктуры для интеграционных тестов. */
 export async function isInfraAvailable(): Promise<boolean> {
   try {
@@ -26,14 +38,5 @@ export async function isInfraAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
-  return true;
-}
-
-export async function runIfInfra(suiteFn: () => void): Promise<boolean> {
-  const ok = await isInfraAvailable();
-  if (!ok) {
-    return false;
-  }
-  suiteFn();
   return true;
 }

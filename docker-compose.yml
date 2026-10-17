@@ -17,13 +17,23 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # Аудит п.35: Redis с паролем — пароль берётся из .env (REDIS_PASSWORD).
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}",
+      ]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -32,8 +42,9 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      # Аудит п.35: креды обязательны, без дефолта minioadmin.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
@@ -45,6 +56,10 @@ services:
       timeout: 5s
       retries: 10
 
+  # Аудит п.20: бакет приватный — анонимам открыт только чтение префикса
+  # images/ (фото объявлений/аватаров), анонимный листинг объектов закрыт.
+  # Фото чатов (chat/) и загрузки (raw/) отдаёт API через /api/files
+  # с проверкой доступа.
   createbuckets:
     image: minio/mc:latest
     depends_on:
@@ -52,9 +67,10 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc alias set local http://minio:9000 '${MINIO_ROOT_USER}' '${MINIO_ROOT_PASSWORD}';
       mc mb --ignore-existing local/marketplace;
-      mc anonymous set download local/marketplace;
+      echo '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":[\"arn:aws:s3:::marketplace/images/*\"]}]}' > /tmp/anonymous-policy.json;
+      mc anonymous set-json local/marketplace /tmp/anonymous-policy.json;
       exit 0;
       "
 
@@ -79,8 +95,16 @@ services:
         condition: service_completed_successfully
     env_file:
       - .env
+    environment:
+      # Внутри контейнера API слушает все интерфейсы (для публикации порта),
+      # наружу порт открыт только на 127.0.0.1 хоста.
+      HOST: 0.0.0.0
+      # Аудит п.35: пароль Redis задан в .env, внутри сети используем хост redis.
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}@redis:6379
     ports:
-      - "4000:4000"
+      # Аудит п.33: только loopback — наружу трафик идёт через nginx хоста,
+      # во все интерфейсы порт не публикуется.
+      - "127.0.0.1:4000:4000"
     command: ["node", "dist/src/server.js"]
 
   worker:
@@ -94,6 +118,8 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}@redis:6379
     command: ["node", "dist/index.js"]
 
   web:
@@ -106,7 +132,8 @@ services:
     env_file:
       - .env
     ports:
-      - "3000:3000"
+      # Аудит п.33: только loopback — веб доступен только через nginx хоста.
+      - "127.0.0.1:3000:3000"
 
 volumes:
   pgdata:

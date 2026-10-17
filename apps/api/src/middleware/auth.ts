@@ -108,3 +108,19 @@ export const requireModerator = requireRole('ADMIN', 'MODERATOR');
 export function isModeratorRole(role: string): boolean {
   return USER_ROLES.includes(role as (typeof USER_ROLES)[number]) && role !== 'USER';
 }
+
+/**
+ * Аудит п.39: `?all=1` (включить неактивные категории/регионы) доступен
+ * только MODERATOR/ADMIN. Ставится ПОСЛЕ optionalAuthenticate: анонимам и
+ * обычным пользователям с флагом — отказ, без флага маршрут остаётся публичным.
+ */
+export function requireModeratorForAll(req: Request, _res: Response, next: NextFunction) {
+  if (req.query.all !== '1') return next();
+  if (!req.userId || !req.userRole) {
+    return next(new AppError(errorCodes.UNAUTHORIZED, 'Требуется авторизация', 401));
+  }
+  if (!isModeratorRole(req.userRole)) {
+    return next(new AppError(errorCodes.FORBIDDEN, 'Недостаточно прав', 403));
+  }
+  next();
+}

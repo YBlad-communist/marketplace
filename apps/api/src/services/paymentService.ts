@@ -111,6 +111,34 @@ export async function ensureSellerPayout(
   if (!normalized) {
     throw new AppError(errorCodes.VALIDATION, 'Укажите реквизит счёта продавца', 400);
   }
+  // Аудит п.11: формат реквизита — только безопасные символы (Shop ID ЮKassa
+  // и расширенный счёт Монеты — цифровые идентификаторы).
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(normalized)) {
+    throw new AppError(
+      errorCodes.VALIDATION,
+      'Некорректный формат реквизита: допустимы буквы, цифры, «-» и «_» (до 64 символов)',
+      400
+    );
+  }
+  // TODO(аудит п.11): проверять через API провайдера, что магазин/счёт
+  // реально подключён к платформе и принадлежит продавцу, до сохранения.
+  // Сейчас принимаем реквизит на веру — непроверенный shopId упадёт только
+  // при первой выплате.
+  const currentRef = seller.payoutAccountId ?? seller.yookassaShopId;
+  if (currentRef && currentRef !== normalized) {
+    // Смена реквизита при живых сделках сломает выплаты по ним — запрещаем.
+    const activeOrder = await prisma.order.findFirst({
+      where: { listing: { sellerId }, status: { in: [...ACTIVE_ORDER_STATUSES] } },
+      select: { id: true },
+    });
+    if (activeOrder) {
+      throw new AppError(
+        errorCodes.CONFLICT,
+        'Нельзя менять реквизиты выплат, пока по вашим объявлениям есть активные заказы',
+        409
+      );
+    }
+  }
 
   await prisma.user.update({
     where: { id: sellerId },
@@ -171,6 +199,11 @@ export async function createEscrowOrder(input: {
     where: { idempotencyKey: input.idempotencyKey },
   });
   if (existingOrder) {
+    // Аудит п.9: ключ идемпотентности уникален на пользователя — чужой заказ
+    // (другой buyerId) не возвращаем, иначе утечёт чужой confirmation_token.
+    if (existingOrder.buyerId !== input.buyerId) {
+      throw new AppError(errorCodes.CONFLICT, 'Idempotency-ключ уже использован', 409);
+    }
     if (existingOrder.listingId !== input.listingId) {
       throw new AppError(errorCodes.CONFLICT, 'Idempotency-ключ уже использован', 409);
     }
@@ -465,21 +498,24 @@ export async function refundOrder(orderId: string, actorId: string, role: string
   if (!isBuyer && !isStaff) {
     throw new AppError(errorCodes.FORBIDDEN, 'Нет прав на возврат', 403);
   }
+  // Аудит п.5: покупатель сам возвращает деньги ТОЛЬКО из PENDING (отмена
+  // неоплаченного заказа). Из PAID/DISPUTED возврат делает только поддержка —
+  // иначе покупатель обходил эскроу: заплатил, сразу «вернул» и забрал товар.
+  if (isBuyer && !isStaff && order.status !== 'PENDING') {
+    throw new AppError(
+      errorCodes.FORBIDDEN,
+      order.status === 'SHIPPED' || order.status === 'DISPUTED'
+        ? 'Товар уже в пути: возврат возможен только через спор, решение примет поддержка'
+        : 'Возврат по оплаченному заказу выполняет поддержка. Продавец отмечает отправку, затем открывается спор.',
+      403
+    );
+  }
   // SHIPPED: товар уехал — возврат возможен только через спор (для всех,
   // включая staff: решение по спору принимается из статуса DISPUTED).
   if (order.status === 'SHIPPED') {
     throw new AppError(
       errorCodes.CONFLICT,
       'Товар уже отправлен: возврат возможен только через спор',
-      409
-    );
-  }
-  // DISPUTED: покупатель сам себе возврат не делает — решение примет
-  // поддержка (refundOrder из DISPUTED — это и есть «вернуть покупателю»).
-  if (isBuyer && order.status === 'DISPUTED') {
-    throw new AppError(
-      errorCodes.CONFLICT,
-      'По заказу уже открыт спор: решение примет поддержка',
       409
     );
   }
@@ -806,139 +842,140 @@ export async function handlePaymentWebhook(
   }
 
   const redis = getRedis();
-  const dedupe = await redis.set(
-    `payment:webhook:${provider.name}:${event.dedupeId}`,
-    '1',
-    'EX',
-    86400,
-    'NX'
-  );
+  // Аудит п.10: ключ дедупликации ставим как claim ДО обработки (защита от
+  // параллельных дублей), но при ошибке обработки удаляем его — иначе retry
+  // провайдера получил бы 'duplicate' и событие потерялось бы навсегда.
+  const dedupeKey = `payment:webhook:${provider.name}:${event.dedupeId}`;
+  const dedupe = await redis.set(dedupeKey, '1', 'EX', 86400, 'NX');
   if (dedupe !== 'OK') {
     return { received: true, handled: 'duplicate' };
   }
 
-  if (event.type === 'refund') {
-    const paymentId = event.providerPaymentId;
-    const payment = await provider.getStatus(paymentId).catch((err) => {
-      logger.warn({ err, paymentId }, 'refund webhook: payment lookup failed, skipping');
-      return null;
-    });
-    if (!payment) return { received: true, handled: 'verification_failed' };
+  try {
+    if (event.type === 'refund') {
+      const paymentId = event.providerPaymentId;
+      // Ошибка запроса к провайдеру -> исключение -> 5xx -> провайдер ретраит.
+      await provider.getStatus(paymentId);
 
-    const existing = await prisma.order.findFirst({
-      where: { providerPaymentId: paymentId },
-      select: { id: true, listingId: true, status: true },
-    });
-    if (!existing) return { received: true, handled: 'refund.succeeded' };
-
-    if (existing.status === 'RELEASED' || existing.status === 'RELEASING') {
-      // Деньги уже переведены продавцу (или переводятся): платформа получила
-      // возврат средств продавца, но «авто-возврат» покупателю тут запрещён —
-      // иначе сумма спишется дважды. Статус не трогаем, уведомляем админа.
-      logger.warn({
-        orderId: existing.id, paymentId, refundId: event.providerRefundId, status: existing.status,
-      }, 'refund after pay-out; manual resolution required');
-      await notifyAdmin(
-        'Возврат по уже выплаченной сделке',
-        `Возврат ${event.providerRefundId ?? '?'} по платежу ${paymentId}. ` +
-          `Заказ ${existing.id} уже переведён продавцу (статус ${existing.status}): ` +
-          `возврат покупателю оформите вручную в кабинете платежного провайдера.`
-      );
-      return { received: true, handled: 'refund.succeeded' };
-    }
-
-    const marked = await prisma.order.updateMany({
-      where: { providerPaymentId: paymentId, status: { notIn: ['REFUNDED', 'RELEASING', 'RELEASED', 'DISPUTED'] } },
-      data: { status: 'REFUNDED' },
-    });
-    if (marked.count > 0) {
-      const target = await prisma.order.findFirst({
+      const existing = await prisma.order.findFirst({
         where: { providerPaymentId: paymentId },
-        select: { listingId: true },
+        select: { id: true, listingId: true, status: true },
       });
-      if (target) await unlockListing(target.listingId);
-      logger.info({ orderId: existing.id, paymentId, refundId: event.providerRefundId }, 'payment refunded via webhook');
-    }
-    return { received: true, handled: 'refund.succeeded' };
-  }
+      if (!existing) return { received: true, handled: 'refund.succeeded' };
 
-  // Платёжное событие: сверяем статус повторным запросом к провайдеру.
-  const paymentId = event.providerPaymentId;
-  const payment = await provider.getStatus(paymentId).catch((err) => {
-    logger.warn({ err, paymentId }, 'payment webhook: lookup failed, skipping');
-    return null;
-  });
-  if (!payment || (event.notifiedStatus && payment.status !== event.notifiedStatus)) {
-    // Устаревшая/повторная доставка: статус в уведомлении не совпал с текущим.
-    logger.warn(
-      { paymentId, notified: event.notifiedStatus, currentStatus: payment?.status },
-      'webhook status mismatch, skipping'
-    );
-    return { received: true, handled: 'stale' };
-  }
+      if (existing.status === 'RELEASED' || existing.status === 'RELEASING') {
+        // Деньги уже переведены продавцу (или переводятся): платформа получила
+        // возврат средств продавца, но «авто-возврат» покупателю тут запрещён —
+        // иначе сумма спишется дважды. Статус не трогаем, уведомляем админа.
+        logger.warn({
+          orderId: existing.id, paymentId, refundId: event.providerRefundId, status: existing.status,
+        }, 'refund after pay-out; manual resolution required');
+        await notifyAdmin(
+          'Возврат по уже выплаченной сделке',
+          `Возврат ${event.providerRefundId ?? '?'} по платежу ${paymentId}. ` +
+            `Заказ ${existing.id} уже переведён продавцу (статус ${existing.status}): ` +
+            `возврат покупателю оформите вручную в кабинете платежного провайдера.`
+        );
+        return { received: true, handled: 'refund.succeeded' };
+      }
 
-  const orderKey = payment.orderKey;
-  switch (payment.status) {
-    case 'authorized': {
-      // Эскроу: средства авторизованы и удерживаются платформой.
-      if (orderKey) {
-        await prisma.order.updateMany({
-          where: { idempotencyKey: orderKey, status: 'PENDING' },
-          data: { status: 'PAID' },
-        });
-      }
-      break;
-    }
-    case 'captured': {
-      // Captured наступает ПОСЛЕ confirm в releaseOrder (или вручную из
-      // кабинета провайдера). Никогда не делаем авто-RELEASE без подтверждения
-      // покупателя: только доводим PENDING/PAID до PAID.
-      if (orderKey) {
-        const existing = await prisma.order.findUnique({
-          where: { idempotencyKey: orderKey },
-          select: { id: true, status: true },
-        });
-        if (existing && (existing.status === 'PENDING' || existing.status === 'PAID')) {
-          await prisma.order.update({
-            where: { id: existing.id },
-            data: { status: 'PAID' },
-          });
-          logger.info({ orderKey, paymentId }, 'escrow authorized, awaiting buyer confirmation');
-        }
-      }
-      break;
-    }
-    case 'canceled': {
-      // Оплата не состоялась или холд отменён. PENDING-заказ удаляем (иначе он
-      // заблокирует повторную покупку), PAID/… переводим в REFUNDED (деньги уже
-      // вернулись покупателю) и снимаем резерв с объявления.
-      if (orderKey) {
-        const doomed = await prisma.order.findFirst({
-          where: { idempotencyKey: orderKey, status: 'PENDING' },
-          select: { id: true, listingId: true },
-        });
-        if (doomed) {
-          await prisma.order.delete({ where: { id: doomed.id } });
-          await unlockListing(doomed.listingId);
-        }
-      }
-      const held = await prisma.order.updateMany({
-        where: { providerPaymentId: paymentId, status: { in: ['PAID', 'DISPUTED', 'SHIPPED'] } },
+      const marked = await prisma.order.updateMany({
+        where: { providerPaymentId: paymentId, status: { notIn: ['REFUNDED', 'RELEASING', 'RELEASED', 'DISPUTED'] } },
         data: { status: 'REFUNDED' },
       });
-      if (held.count > 0) {
+      if (marked.count > 0) {
         const target = await prisma.order.findFirst({
           where: { providerPaymentId: paymentId },
           select: { listingId: true },
         });
         if (target) await unlockListing(target.listingId);
+        logger.info({ orderId: existing.id, paymentId, refundId: event.providerRefundId }, 'payment refunded via webhook');
       }
-      break;
+      return { received: true, handled: 'refund.succeeded' };
     }
-    default:
-      break;
+
+    // Платёжное событие: сверяем статус повторным запросом к провайдеру.
+    // Ошибка запроса -> исключение -> ключ дедупа удалён в catch -> 5xx.
+    const paymentId = event.providerPaymentId;
+    const payment = await provider.getStatus(paymentId);
+    if (event.notifiedStatus && payment.status !== event.notifiedStatus) {
+      // Устаревшая/повторная доставка: статус в уведомлении не совпал с текущим.
+      // Это штатный исход (не ошибка) — ключ дедупа оставляем, повтор не поможет.
+      logger.warn(
+        { paymentId, notified: event.notifiedStatus, currentStatus: payment.status },
+        'webhook status mismatch, skipping'
+      );
+      return { received: true, handled: 'stale' };
+    }
+
+    const orderKey = payment.orderKey;
+    switch (payment.status) {
+      case 'authorized': {
+        // Эскроу: средства авторизованы и удерживаются платформой.
+        if (orderKey) {
+          await prisma.order.updateMany({
+            where: { idempotencyKey: orderKey, status: 'PENDING' },
+            data: { status: 'PAID' },
+          });
+        }
+        break;
+      }
+      case 'captured': {
+        // Captured наступает ПОСЛЕ confirm в releaseOrder (или вручную из
+        // кабинета провайдера). Никогда не делаем авто-RELEASE без подтверждения
+        // покупателя: только доводим PENDING/PAID до PAID.
+        if (orderKey) {
+          const existing = await prisma.order.findUnique({
+            where: { idempotencyKey: orderKey },
+            select: { id: true, status: true },
+          });
+          if (existing && (existing.status === 'PENDING' || existing.status === 'PAID')) {
+            await prisma.order.update({
+              where: { id: existing.id },
+              data: { status: 'PAID' },
+            });
+            logger.info({ orderKey, paymentId }, 'escrow authorized, awaiting buyer confirmation');
+          }
+        }
+        break;
+      }
+      case 'canceled': {
+        // Оплата не состоялась или холд отменён. PENDING-заказ удаляем (иначе он
+        // заблокирует повторную покупку), PAID/… переводим в REFUNDED (деньги уже
+        // вернулись покупателю) и снимаем резерв с объявления.
+        if (orderKey) {
+          const doomed = await prisma.order.findFirst({
+            where: { idempotencyKey: orderKey, status: 'PENDING' },
+            select: { id: true, listingId: true },
+          });
+          if (doomed) {
+            await prisma.order.delete({ where: { id: doomed.id } });
+            await unlockListing(doomed.listingId);
+          }
+        }
+        const held = await prisma.order.updateMany({
+          where: { providerPaymentId: paymentId, status: { in: ['PAID', 'DISPUTED', 'SHIPPED'] } },
+          data: { status: 'REFUNDED' },
+        });
+        if (held.count > 0) {
+          const target = await prisma.order.findFirst({
+            where: { providerPaymentId: paymentId },
+            select: { listingId: true },
+          });
+          if (target) await unlockListing(target.listingId);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    return { received: true, handled: event.dedupeId };
+  } catch (err) {
+    // Обработка упала (в т.ч. ошибка провайдера) — снимаем claim, чтобы retry
+    // провайдера обработал событие по-новой, а не получил 'duplicate'.
+    await redis.del(dedupeKey).catch(() => undefined);
+    throw err;
   }
-  return { received: true, handled: event.dedupeId };
 }
 
 /**

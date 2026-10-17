@@ -12,24 +12,58 @@ router.post('/', authenticate, validate(reviewCreateSchema), async (req, res, ne
     const { revieweeId, orderId, rating, text } = req.body;
 
     // Свободный отзыв с профиля продавца (без сделки): дедуп — один отзыв
-    // без orderId на пару (author, reviewee), т.к. NULL-уникальность в PG не работает.
+    // без orderId на пару (author, reviewee), т.к. NULL-уникальность в PG не работает
+    // (контролирует частичный уникальный индекс, см. миграцию review_free_partial_unique).
     if (!orderId) {
       if (revieweeId === req.userId) {
         throw new AppError(errorCodes.VALIDATION, 'Нельзя оставить отзыв самому себе', 400);
       }
+      // Аудит п.17: свободный отзыв без сделки доступен только «зрелым»
+      // аккаунтам: подтверждённый телефон + возраст старше 7 дней — иначе
+      // отзывами накручивали рейтинг свежими ботами.
+      const author = await prisma.user.findUnique({
+        where: { id: req.userId! },
+        select: { phoneVerifiedAt: true, createdAt: true },
+      });
+      if (!author?.phoneVerifiedAt) {
+        throw new AppError(
+          errorCodes.FORBIDDEN,
+          'Отзыв без сделки может оставить только пользователь с подтверждённым телефоном',
+          403
+        );
+      }
+      const accountAgeMs = Date.now() - author.createdAt.getTime();
+      if (accountAgeMs < 7 * 86_400_000) {
+        throw new AppError(
+          errorCodes.FORBIDDEN,
+          'Отзыв без сделки доступен с 7-го дня существования аккаунта',
+          403
+        );
+      }
       const reviewee = await prisma.user.findUnique({ where: { id: revieweeId }, select: { id: true } });
       if (!reviewee) throw new AppError(errorCodes.NOT_FOUND, 'Пользователь не найден', 404);
-      const existing = await prisma.review.findFirst({
-        where: { authorId: req.userId!, revieweeId, orderId: null },
-        select: { id: true },
-      });
-      if (existing) {
-        throw new AppError(errorCodes.CONFLICT, 'Вы уже оставили отзыв этому пользователю', 409);
-      }
+      // Проверка дубля — внутри транзакции: гонка двух параллельных POST
+      // ловится и findFirst, и частичный уникальный индекс (P2002 → 409).
       const review = await prisma.$transaction(async (tx) => {
-        const created = await tx.review.create({
-          data: { authorId: req.userId!, revieweeId, orderId: null, rating, text },
+        const existing = await tx.review.findFirst({
+          where: { authorId: req.userId!, revieweeId, orderId: null },
+          select: { id: true },
         });
+        if (existing) {
+          throw new AppError(errorCodes.CONFLICT, 'Вы уже оставили отзыв этому пользователю', 409);
+        }
+        let created;
+        try {
+          created = await tx.review.create({
+            data: { authorId: req.userId!, revieweeId, orderId: null, rating, text },
+          });
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (code === 'P2002') {
+            throw new AppError(errorCodes.CONFLICT, 'Вы уже оставили отзыв этому пользователю', 409);
+          }
+          throw err;
+        }
         const agg = await tx.review.aggregate({
           where: { revieweeId },
           _avg: { rating: true },

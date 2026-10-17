@@ -26,15 +26,25 @@ export async function verifySmartCaptcha(token: string | undefined, ip?: string)
   }
 }
 
-export function requireCaptcha(req: Request, _res: Response, next: NextFunction) {
-  if (!env.SMARTCAPTCHA_ENABLED) return next();
-  const token = (req.body as { captchaToken?: string })?.captchaToken;
-  verifySmartCaptcha(token, req.ip).then((ok) => {
+export async function requireCaptcha(req: Request, _res: Response, next: NextFunction) {
+  try {
+    if (!env.SMARTCAPTCHA_ENABLED) return next();
+    const token = (req.body as { captchaToken?: string })?.captchaToken;
+    const ok = await verifySmartCaptcha(token, req.ip);
     if (!ok) {
       return next(new AppError(errorCodes.VALIDATION, 'Не пройдена проверка CAPTCHA', 400));
     }
+    // П.25: токен капчи одноразовый — использованный не принимаем повторно.
+    if (token) {
+      if (await isCaptchaTokenUsed(token)) {
+        return next(new AppError(errorCodes.VALIDATION, 'Не пройдена проверка CAPTCHA', 400));
+      }
+      await consumeCaptchaToken(token);
+    }
     next();
-  });
+  } catch (err) {
+    next(err);
+  }
 }
 
 /** Одноразовая проверка: использованный токен не принимаем повторно */

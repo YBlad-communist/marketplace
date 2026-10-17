@@ -10,35 +10,20 @@ const nextConfig = {
   reactStrictMode: true,
   typedRoutes: false,
   images: {
-    remotePatterns: [
-      { protocol: 'http', hostname: 'localhost', port: '9000' },
-      { protocol: 'http', hostname: 's3.rinokru.com' },
-      { protocol: 'https', hostname: 's3.rinokru.com' },
-      { protocol: 'https', hostname: '**' },
-    ],
+    // Аудит п.34: только конкретный https-домен S3 — без wildcard '**' и
+    // без http-вариантов. При этом страницы используют /api/files (один origin),
+    // а next/image сейчас нигде не применяется.
+    remotePatterns: [{ protocol: 'https', hostname: 's3.rinokru.com' }],
   },
   async headers() {
     if (process.env.NODE_ENV !== 'production') return [];
-    const apiOrigin = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-    // Убираем путь /api — WebSocket живёт на /socket.io/, а не на /api/.
-    const apiHost = apiOrigin.replace(/\/api\/?$/, '');
-    const wsOrigin = apiHost.replace(/^http/, 'ws');
+    // CSP (с nonce) выставляет middleware.ts — здесь только статические
+    // security-заголовки, включая HSTS (аудит п.34).
     return [
       {
         source: '/:path*',
         headers: [
-          {
-            key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' https://yookassa.ru https://*.yookassa.ru",
-              "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob: http://s3.rinokru.com https://s3.rinokru.com https: http:",
-              `connect-src 'self' ${apiOrigin} ${wsOrigin} http://rinokru.com https://rinokru.com ws://rinokru.com wss://rinokru.com http://s3.rinokru.com https://s3.rinokru.com http://localhost:3000 http://localhost:4000 http://localhost:9000 http://127.0.0.1:3000 http://127.0.0.1:4000 http://127.0.0.1:9000 ws://localhost:4000 ws://127.0.0.1:4000 https://yookassa.ru https://*.yookassa.ru wss://yookassa.ru wss://*.yookassa.ru`,
-              "frame-src https://yookassa.ru https://*.yookassa.ru",
-              "frame-ancestors 'none'",
-            ].join('; '),
-          },
+          { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' },
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },

@@ -3,7 +3,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
-import { isInfraAvailable } from './helpers.js';
+import { isInfraAvailable, markPhoneVerified } from './helpers.js';
 import { installYookassaFake } from './yookassa-fake.js';
 
 // Создание заказа идёт через paymentService (сеть ЮKassa) — мокаем, как в reviews-тесте.
@@ -44,8 +44,11 @@ describeInfra('account deletion (integration)', () => {
   });
 
   it('blocks deletion with active order -> 409', async () => {
-    const seller = await registerAndLogin('Продавец-удаление', `+7${Date.now().toString().slice(-9)}4`);
-    const buyer = await registerAndLogin('Покупатель-удаление', `+7${Date.now().toString().slice(-9)}5`);
+    const sellerPhone = `+7${Date.now().toString().slice(-9)}4`;
+    const buyerPhone = `+7${Date.now().toString().slice(-9)}5`;
+    const seller = await registerAndLogin('Продавец-удаление', sellerPhone);
+    const buyer = await registerAndLogin('Покупатель-удаление', buyerPhone);
+    await markPhoneVerified(buyerPhone);
     await prisma.user.update({
       where: { id: seller.userId },
       data: { yookassaShopId: 'shop_del', yookassaOnboarded: true },

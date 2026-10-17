@@ -7,15 +7,16 @@ import {
   imagePresignSchema,
   createImagesDoneSchema,
   ACTIVE_ORDER_STATUSES,
+  LISTING_IMAGE_LIMIT,
   AppError,
   errorCodes,
 } from '@marketplace/shared';
 import { validate } from '../middleware/validate.js';
 import { authenticate, optionalAuthenticate } from '../middleware/auth.js';
-import { rateLimit } from '../middleware/rateLimit.js';
+import { rateLimit, ipRateLimit, userRateLimit } from '../middleware/rateLimit.js';
 import { requireCaptcha } from '../middleware/captcha.js';
-import { createPresignedUpload, deleteObject, verifyImageObject } from '../lib/s3.js';
-import { processImage } from '../services/imageService.js';
+import { createPresignedUpload, verifyImageObject } from '../lib/s3.js';
+import { processImage, deleteSourceAfterProcess } from '../services/imageService.js';
 import { enqueueS3Delete } from '../services/notificationService.js';
 import { getRedis } from '../lib/redis.js';
 import {
@@ -65,7 +66,7 @@ async function assertNoOrderHistory(listingId: string): Promise<void> {
 async function assertOwnerOrModerator(listingId: string, userId: string, role: string) {
   const listing = await prisma.listing.findUnique({
     where: { id: listingId },
-    select: { id: true, sellerId: true },
+    select: { id: true, sellerId: true, status: true, title: true, description: true },
   });
   if (!listing) throw new AppError(errorCodes.NOT_FOUND, 'Объявление не найдено', 404);
   const isOwner = listing.sellerId === userId;
@@ -96,13 +97,39 @@ async function updateSearchTs(listingId: string, title: string, description: str
   await prisma.$executeRaw`UPDATE "Listing" SET "searchTs" = to_tsvector('simple', ${title} || ' ' || ${description}) WHERE id = ${listingId}`;
 }
 
+/**
+ * Аудит п.13: владельческие фильтры (status/sellerId/favoritesOf) работают
+ * только для собственных данных зрителя; чужие значения игнорируются или
+ * вырождаются в публичный ACTIVE-режим, чтобы не чужие не-ACTIVE не утекали.
+ */
+function scopeQueryToViewer(
+  input: Record<string, unknown>,
+  viewerId: string | undefined
+): void {
+  if (input.favoritesOf && input.favoritesOf !== viewerId) {
+    delete input.favoritesOf;
+  }
+  const ownsFav = !!input.favoritesOf; // после чистки осталось только своё
+  const ownsSeller = !!input.sellerId && input.sellerId === viewerId;
+  if (input.sellerId && !ownsSeller) {
+    // Чужой профиль: любой статус вырождается в публичный ACTIVE.
+    input.status = 'ACTIVE';
+  } else if (input.status && !ownsSeller && !ownsFav) {
+    // Без «своего кабинета» (sellerId=me) или «своих избранных» статус игнорируем.
+    delete input.status;
+  }
+}
+
 router.get(
   '/',
   optionalAuthenticate,
+  ipRateLimit('listings:search', 60_000, 60),
   validate(listingQuerySchema, 'query'),
   async (req, res, next) => {
     try {
-      const result = await searchListings(req.query as never, req.userId);
+      const input = { ...(req.query as Record<string, unknown>) };
+      scopeQueryToViewer(input, req.userId);
+      const result = await searchListings(input as never, req.userId);
       res.json({ data: result });
     } catch (err) {
       next(err);
@@ -112,7 +139,7 @@ router.get(
 
 router.get('/:id', optionalAuthenticate, async (req, res, next) => {
   try {
-    const listing = await getListingById(req.params.id, req.userId, req.ip);
+    const listing = await getListingById(req.params.id, req.userId, req.ip, req.userRole);
     res.json({ data: { listing } });
   } catch (err) {
     next(err);
@@ -178,7 +205,7 @@ router.post(
           }
           await verifyImageObject(img.key);
           const processed = await processImage(img.key);
-          await deleteObject(img.key);
+          await deleteSourceAfterProcess(img.key, processed);
           processedImages.push({
             key: processed.fullKey,
             url: processed.publicUrl,
@@ -244,11 +271,40 @@ router.patch(
         data.address = typeof a === 'string' && a.trim() ? a.trim() : null;
       }
 
+      // Аудит п.12: владелец переключает статус только ACTIVE↔ARCHIVED.
+      // Из REJECTED/PENDING/SOLD/RESERVED смена статуса владельцем — 409
+      // (отклонённое возвращает только модератор, купленное — только сделка).
+      if (data.status !== undefined) {
+        const current = listing.status;
+        const next = data.status as string;
+        const canToggle = ['ACTIVE', 'ARCHIVED'].includes(current) && ['ACTIVE', 'ARCHIVED'].includes(next);
+        if (!canToggle) {
+          throw new AppError(
+            errorCodes.CONFLICT,
+            `Смена статуса из ${current} на ${next} невозможна: разрешены только ACTIVE↔ARCHIVED`,
+            409
+          );
+        }
+      }
+
       // Цена и статус участвуют в исполнении активных заказов (эскроу считает
       // fee от price, статус RESERVED предотвращает повторные покупки):
       // менять их, пока висит заказ, нельзя — 409, а не тихий разъезд данных.
       if (data.price !== undefined || data.status !== undefined) {
         await assertNoActiveOrder(listing.id, 'изменить цену или статус');
+      }
+
+      // Аудит п.12: правка title/description заново прогоняет модерацию;
+      // при отказе объявление уходит в REJECTED (не доверяем ручной правке).
+      if (data.title !== undefined || data.description !== undefined) {
+        const moderation = await moderateListingContent({
+          title: (data.title as string | undefined) ?? listing.title,
+          description: (data.description as string | undefined) ?? listing.description,
+        });
+        if (!moderation.approve) {
+          data.status = 'REJECTED';
+          data.moderationNote = moderation.reason ?? 'Отклонено модерацией';
+        }
       }
 
       const updated = await prisma.listing.update({
@@ -300,6 +356,8 @@ router.delete('/:id', authenticate, async (req, res, next) => {
 router.post(
   '/:id/images',
   authenticate,
+  // П.22 аудита: presign на фото объявления — не больше 30 в час.
+  userRateLimit('listings:images', 60 * 60 * 1000, 30),
   validate(imagePresignSchema, 'body'),
   async (req, res, next) => {
     try {
@@ -324,6 +382,16 @@ router.post(
       if (!isOwner) {
         throw new AppError(errorCodes.FORBIDDEN, 'Только владелец может добавлять фото', 403);
       }
+      // Аудит п.14: итоговое число фото ограничено — проверяем квоту ДО
+      // обработки загруженных файлов (лимит схемы зовут только одну порцию).
+      const existingCount = await prisma.listingImage.count({ where: { listingId: listing.id } });
+      if (existingCount + req.body.imageKeys.length > LISTING_IMAGE_LIMIT) {
+        throw new AppError(
+          errorCodes.CONFLICT,
+          `Максимум ${LISTING_IMAGE_LIMIT} фото в объявлении (сейчас ${existingCount})`,
+          409
+        );
+      }
       const issued = await takePresignedKeys(req.userId!);
       const results: { key: string; url: string; thumbUrl: string; width: number; height: number; position: number }[] = [];
       for (const img of req.body.imageKeys) {
@@ -332,7 +400,7 @@ router.post(
         }
         await verifyImageObject(img.key);
         const processed = await processImage(img.key);
-        await deleteObject(img.key);
+        await deleteSourceAfterProcess(img.key, processed);
         results.push({
           key: processed.fullKey,
           url: processed.publicUrl,

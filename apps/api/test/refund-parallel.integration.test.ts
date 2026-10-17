@@ -3,7 +3,7 @@ import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
-import { isInfraAvailable } from './helpers.js';
+import { isInfraAvailable, markPhoneVerified } from './helpers.js';
 import { installYookassaFake } from './yookassa-fake.js';
 
 // Считаем обращения к ЮKassa при возврате: двойной возврат = cancel или
@@ -22,6 +22,9 @@ const unique = Date.now();
 let sellerToken = '';
 let listingIds: string[] = [];
 let buyerToken = '';
+// Аудит п.5: возврат из PAID делает только поддержка — гонки проверяем
+// админским токеном.
+let adminToken = '';
 
 async function makePaidOrder(keySuffix: string): Promise<{ orderId: string; listingId: string }> {
   const usedListing = listingIds.shift();
@@ -48,8 +51,16 @@ beforeAll(async () => {
 
   const buyerPhone = `+7${unique.toString().slice(-9)}2`;
   await request(app).post('/api/auth/register').send({ name: 'Покупатель-рефаунд', phone: buyerPhone, password, confirmPassword: password });
+  await markPhoneVerified(buyerPhone);
   const buyer = await request(app).post('/api/auth/login').send({ phone: buyerPhone, password });
   buyerToken = buyer.body.data.accessToken as string;
+
+  const adminPhone = `+7${unique.toString().slice(-9)}9`;
+  await request(app).post('/api/auth/register').send({ name: 'Админ-рефаунд', phone: adminPhone, password, confirmPassword: password });
+  const adminUser = await prisma.user.findUniqueOrThrow({ where: { phone: adminPhone } });
+  await prisma.user.update({ where: { id: adminUser.id }, data: { role: 'ADMIN' } });
+  const adminLogin = await request(app).post('/api/auth/login').send({ phone: adminPhone, password });
+  adminToken = adminLogin.body.data.accessToken as string;
 
   const makeListing = async (i: number) => {
     const res = await request(app)
@@ -72,8 +83,8 @@ describeInfra('refund: параллельный вызов не даёт дво�
     fake.calls.refund = 0;
 
     const [a, b] = await Promise.all([
-      request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`),
-      request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`),
+      request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${adminToken}`),
+      request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${adminToken}`),
     ]);
 
     const statuses = [a.status, b.status].sort();
@@ -94,9 +105,9 @@ describeInfra('refund: параллельный вызов не даёт дво�
     fake.calls.cancel = 0;
     fake.calls.refund = 0;
 
-    const first = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`);
+    const first = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${adminToken}`);
     expect(first.status).toBe(200);
-    const second = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`);
+    const second = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${adminToken}`);
     expect(second.status).toBe(409);
     expect(second.body.error.code).toBe('CONFLICT');
     expect(fake.calls.cancel).toBe(1);
@@ -110,7 +121,7 @@ describeInfra('refund: параллельный вызов не даёт дво�
 
     const res = await request(app)
       .post(`/api/orders/${orderId}/refund`)
-      .set('Authorization', `Bearer ${buyerToken}`);
+      .set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CONFLICT');
     expect(fake.calls.cancel).toBe(0);
@@ -123,11 +134,25 @@ describeInfra('refund: параллельный вызов не даёт дво�
     fake.calls.cancel = 0;
     fake.calls.refund = 0;
 
-    const res = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${buyerToken}`);
+    const res = await request(app).post(`/api/orders/${orderId}/refund`).set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
     expect(fake.calls.cancel).toBe(0);
     expect(fake.calls.refund).toBe(1);
     const updated = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(updated.status).toBe('REFUNDED');
+  });
+
+  it('покупатель не может вернуть оплаченный заказ сам (403)', async () => {
+    const { orderId } = await makePaidOrder('buyer-self-refund');
+    fake.calls.cancel = 0;
+    fake.calls.refund = 0;
+    const res = await request(app)
+      .post(`/api/orders/${orderId}/refund`)
+      .set('Authorization', `Bearer ${buyerToken}`);
+    expect(res.status).toBe(403);
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe('PAID');
+    expect(fake.calls.cancel).toBe(0);
+    expect(fake.calls.refund).toBe(0);
   });
 });

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 import pino from 'pino';
 
 const env = {
@@ -17,9 +18,9 @@ export const logger = pino({
   base: { service: 'marketplace-worker' },
 });
 
-let transport: nodemailer.Transporter | null = null;
+let transport: Transporter | null = null;
 
-export function getTransport(): nodemailer.Transporter {
+export function getTransport(): Transporter {
   if (!transport) {
     if (!env.SMTP_HOST) {
       throw new Error(
@@ -97,8 +98,4 @@ export async function sendEmail(payload: {
     text: payload.text,
     html,
   });
-}
-
-export function escapeHtmlForTemplate(value: unknown): string {
-  return escapeHtml(String(value ?? ''));
 }

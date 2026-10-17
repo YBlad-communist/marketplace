@@ -119,6 +119,9 @@ export interface MessageDto {
   senderId: string;
   sender?: { id: string; name: string };
   text: string;
+  // П.31: оригинал текста при первой правке + пометка «изменено».
+  originalText?: string | null;
+  isEdited?: boolean;
   createdAt: string;
   deletedAt?: string | null;
   editedAt?: string | null;

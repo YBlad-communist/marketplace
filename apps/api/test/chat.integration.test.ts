@@ -154,7 +154,7 @@ describeInfra('chat (integration)', () => {
     expect(self.status).toBe(400);
   });
 
-  it('deletes conversation for both participants', async () => {
+  it('п.30: hides conversation for initiator; hard delete only when both hide', async () => {
     const conv = await request(app)
       .post('/api/conversations')
       .set('Authorization', `Bearer ${buyerToken}`)
@@ -165,17 +165,41 @@ describeInfra('chat (integration)', () => {
       .set('Authorization', `Bearer ${buyerToken}`)
       .send({ conversationId, text: 'Привет' });
 
+    // Первое удаление — мягкое скрытие: чат пропадает из списка инициатора,
+    // но история остаётся доступна обоим.
     const del = await request(app)
       .delete(`/api/conversations/${conversationId}`)
       .set('Authorization', `Bearer ${buyerToken}`);
     expect(del.status).toBe(200);
+    expect(del.body.data.hardDeleted).toBe(false);
 
-    // Чат пропал для обоих: история недоступна даже продавцу.
+    const buyerList = await request(app)
+      .get('/api/conversations')
+      .set('Authorization', `Bearer ${buyerToken}`);
+    expect(buyerList.body.data.items.some((c: { id: string }) => c.id === conversationId)).toBe(false);
+
+    const sellerList = await request(app)
+      .get('/api/conversations')
+      .set('Authorization', `Bearer ${sellerToken}`);
+    expect(sellerList.body.data.items.some((c: { id: string }) => c.id === conversationId)).toBe(true);
+
+    const history = await request(app)
+      .get(`/api/conversations/${conversationId}/messages`)
+      .set('Authorization', `Bearer ${sellerToken}`);
+    expect(history.status).toBe(200);
+
+    // Второй участник тоже скрывает — hard delete, история недоступна обоим.
+    const del2 = await request(app)
+      .delete(`/api/conversations/${conversationId}`)
+      .set('Authorization', `Bearer ${sellerToken}`);
+    expect(del2.status).toBe(200);
+    expect(del2.body.data.hardDeleted).toBe(true);
+
     for (const token of [buyerToken, sellerToken]) {
-      const history = await request(app)
+      const gone = await request(app)
         .get(`/api/conversations/${conversationId}/messages`)
         .set('Authorization', `Bearer ${token}`);
-      expect(history.status).toBe(404);
+      expect(gone.status).toBe(404);
     }
   });
 

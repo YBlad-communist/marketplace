@@ -299,15 +299,6 @@ export default function OrderDetailPage() {
                 Подтвердить получение
               </button>
             )}
-            {isBuyer && order.status === 'PAID' && (
-              <button
-                className="btn-secondary text-xs"
-                onClick={() => action.mutate({ type: 'refund' })}
-                disabled={action.isPending}
-              >
-                Запросить возврат
-              </button>
-            )}
             {isBuyer && order.status === 'SHIPPED' && !disputeForm && (
               <button className="btn-secondary text-xs" onClick={() => setDisputeForm(true)}>
                 Открыть спор

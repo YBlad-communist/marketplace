@@ -23,6 +23,7 @@ import { moderateListingJob } from './moderationJob.js';
 import { savedSearchNotificationJob } from './notificationJob.js';
 import { deleteObjectsJob } from './s3Delete.js';
 import { cleanupOrphanedUploads } from './orphanedUploadsCleanup.js';
+import { cleanupStalePendingOrdersJob } from './stalePendingOrders.js';
 
 function connection() {
   return { url: env.REDIS_URL };
@@ -142,6 +143,9 @@ export function createWorkers(): Worker[] {
         } else if (job.name === MAINTENANCE_JOBS.CLEANUP_ORPHANED_UPLOADS) {
           const result = await cleanupOrphanedUploads();
           logger.info({ jobName: job.name, ...result }, 'orphaned uploads cleaned');
+        } else if (job.name === MAINTENANCE_JOBS.CLEANUP_STALE_PENDING_ORDERS) {
+          const result = await cleanupStalePendingOrdersJob();
+          logger.info({ jobName: job.name, ...result }, 'stale pending orders cleaned');
         } else {
           throw new Error(`unknown maintenance job: ${job.name}`);
         }

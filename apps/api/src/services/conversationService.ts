@@ -1,23 +1,50 @@
 import { prisma } from '@marketplace/db';
-import { AppError, errorCodes } from '@marketplace/shared';
-import { env } from '../config.js';
+import { ACTIVE_ORDER_STATUSES, AppError, errorCodes } from '@marketplace/shared';
+import { filesBaseUrl } from '../config.js';
 import { getRedis } from '../lib/redis.js';
-import { deleteObject, verifyImageObject } from '../lib/s3.js';
-import { processImage } from './imageService.js';
+import { verifyImageObject } from '../lib/s3.js';
+import { processImage, deleteSourceAfterProcess } from './imageService.js';
+import { enqueueS3Delete } from './notificationService.js';
 
 /**
- * Web-клиент не знает S3-адрес, поэтому к ключам фото прикладываем готовые URL.
+ * Фото чатов приватны (п.20 аудита): отдаём URL прокси /api/files,
+ * который проверяет, что запросчик — участник диалога. Web-клиент не знает
+ * S3-адрес, поэтому к ключам фото прикладываем готовые URL.
  */
 function withImageUrls<T extends { imageKey: string | null; imageThumbKey: string | null }>(m: T) {
   return {
     ...m,
-    imageUrl: m.imageKey ? `${env.S3_PUBLIC_BASE_URL}/${m.imageKey}` : null,
-    imageThumbUrl: m.imageThumbKey ? `${env.S3_PUBLIC_BASE_URL}/${m.imageThumbKey}` : null,
+    imageUrl: m.imageKey ? `${filesBaseUrl}/${m.imageKey}` : null,
+    imageThumbUrl: m.imageThumbKey ? `${filesBaseUrl}/${m.imageThumbKey}` : null,
   };
 }
 
-function presentMessage<T extends { deletedAt: Date | null; text: string; imageKey: string | null; imageThumbKey: string | null }>(m: T) {
-  return m.deletedAt ? withImageUrls({ ...m, text: 'Сообщение удалено' }) : withImageUrls(m);
+function presentMessage<
+  T extends {
+    deletedAt: Date | null;
+    text: string;
+    originalText?: string | null;
+    editedAt: Date | null;
+    imageKey: string | null;
+    imageThumbKey: string | null;
+  }
+>(m: T) {
+  if (m.deletedAt) {
+    // П.21 аудита: у удалённого сообщения не отдаём ни текст, ни ключи/URL
+    // фото — иначе «удалённая» картинка продолжала бы открываться по ссылке.
+    return {
+      ...m,
+      text: 'Сообщение удалено',
+      originalText: null,
+      imageKey: null,
+      imageThumbKey: null,
+      imageUrl: null,
+      imageThumbUrl: null,
+      isEdited: false,
+    };
+  }
+  // П.31: пометка «изменено» для получателя.
+  return { ...withImageUrls(m), isEdited: !!m.editedAt };
 }
 
 const MSG_RATE_WINDOW = 10_000;
@@ -82,11 +109,40 @@ export async function createConversation(input: { listingId?: string; recipientI
   return conversation;
 }
 
-export async function assertParticipant(conversationId: string, userId: string) {
+const CONV_CACHE_TTL_SECONDS = 30;
+const convCacheKey = (conversationId: string) => `chat:conv:${conversationId}`;
+
+type CachedConversation = {
+  id: string;
+  listingId: string | null;
+  participants: { userId: string; conversationId: string }[];
+};
+
+/**
+ * П.28: кэш участников диалога (30 с). Участники чата не меняются после
+ * создания — инвалидация нужна только при hard delete.
+ */
+async function loadConversationCached(conversationId: string) {
+  const redis = getRedis();
+  const key = convCacheKey(conversationId);
+  try {
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached) as CachedConversation;
+  } catch {
+    // повреждённый кэш — читаем из БД
+  }
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    include: { participants: true },
+    include: { participants: { select: { userId: true, conversationId: true } } },
   });
+  if (conversation) {
+    await redis.setex(key, CONV_CACHE_TTL_SECONDS, JSON.stringify(conversation)).catch(() => undefined);
+  }
+  return conversation;
+}
+
+export async function assertParticipant(conversationId: string, userId: string) {
+  const conversation = await loadConversationCached(conversationId);
   if (!conversation) {
     throw new AppError(errorCodes.NOT_FOUND, 'Чат не найден', 404);
   }
@@ -100,7 +156,8 @@ export async function assertParticipant(conversationId: string, userId: string) 
 export async function listConversations(userId: string, cursor?: string, limit = 20) {
   const take = Math.min(limit, 50) + 1;
   const conversations = await prisma.conversation.findMany({
-    where: { participants: { some: { userId } } },
+    // П.30: скрытые инициатором чаты не показываем в списке.
+    where: { participants: { some: { userId, hiddenAt: null } } },
     orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
     take,
     cursor: cursor ? { id: cursor } : undefined,
@@ -152,7 +209,13 @@ export async function listConversations(userId: string, cursor?: string, limit =
     };
   });
   const nextCursor = hasMore ? page[page.length - 1].id : null;
-  return { items, nextCursor, total: await prisma.conversation.count({ where: { participants: { some: { userId } } } }) };
+  return {
+    items,
+    nextCursor,
+    total: await prisma.conversation.count({
+      where: { participants: { some: { userId, hiddenAt: null } } },
+    }),
+  };
 }
 
 async function unreadCountsByConversation(
@@ -202,11 +265,21 @@ export async function deleteMessage(conversationId: string, messageId: string, m
   if (message.senderId !== msgUserId) {
     throw new AppError(errorCodes.FORBIDDEN, 'Удалять можно только свои сообщения', 403);
   }
-  return prisma.message.update({
+  const imageKeys = [message.imageKey, message.imageThumbKey].filter((k): k is string => !!k);
+  const updated = await prisma.message.update({
     where: { id: messageId },
     data: { deletedAt: new Date() },
   });
+  // П.21 аудита: вместе с soft-delete сообщения удаляем его фото из S3
+  // (в фоне, через BullMQ — ретраи переживают недоступность хранилища).
+  if (imageKeys.length > 0) {
+    await enqueueS3Delete(imageKeys).catch(() => undefined);
+  }
+  return updated;
 }
+
+// П.31: окно редактирования сообщения — 15 минут от создания.
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
 
 export async function editMessage(conversationId: string, messageId: string, msgUserId: string, text: string) {
   const message = await prisma.message.findUnique({ where: { id: messageId } });
@@ -219,28 +292,77 @@ export async function editMessage(conversationId: string, messageId: string, msg
   if (message.deletedAt) {
     throw new AppError(errorCodes.CONFLICT, 'Удалённое сообщение нельзя редактировать', 409);
   }
+  // П.31: правка разрешена только в течение 15 минут после отправки.
+  if (Date.now() - message.createdAt.getTime() > EDIT_WINDOW_MS) {
+    throw new AppError(errorCodes.CONFLICT, 'Сообщение можно редактировать только в течение 15 минут', 409);
+  }
   const updated = await prisma.message.update({
     where: { id: messageId },
-    data: { text, editedAt: new Date() },
+    data: {
+      text,
+      editedAt: new Date(),
+      // П.31: оригинальный текст фиксируем при первой правке (история).
+      originalText: message.originalText ?? message.text,
+    },
   });
-  return withImageUrls(updated);
+  return { ...withImageUrls(updated), isEdited: true };
 }
 
 /**
- * Удаление чата ДЛЯ ОБОИХ участников (hard delete): каскадом уходят
- * сообщения и участники. Возвращает id участников (для сокет-эмитта)
- * и S3-ключи фото (для фонового удаления из хранилища).
+ * П.30: удаление чата — мягкое скрытие для инициатора (hiddenAt).
+ * Hard delete выполняется только когда оба участника скрыли чат.
+ * Чаты, привязанные к объявлениям с активными/спорными заказами, удалять нельзя.
+ * Возвращает { participantIds, imageKeys, hardDeleted }.
  */
 export async function deleteConversation(conversationId: string, userId: string) {
   const conversation = await assertParticipant(conversationId, userId);
+
+  // П.30: запрет удаления, если по объявлению идёт активная или спорная сделка.
+  if (conversation.listingId) {
+    const activeOrder = await prisma.order.findFirst({
+      where: {
+        listingId: conversation.listingId,
+        status: { in: [...ACTIVE_ORDER_STATUSES] },
+      },
+      select: { id: true },
+    });
+    if (activeOrder) {
+      throw new AppError(
+        errorCodes.CONFLICT,
+        'Нельзя удалить чат: по объявлению идёт активная сделка',
+        409
+      );
+    }
+  }
+
+  // Мягкое скрытие для инициатора.
+  await prisma.conversationParticipant.update({
+    where: { conversationId_userId: { conversationId, userId } },
+    data: { hiddenAt: new Date() },
+  });
+
+  // Проверяем, скрыли ли оба участника.
+  const participants = await prisma.conversationParticipant.findMany({
+    where: { conversationId },
+    select: { userId: true, hiddenAt: true },
+  });
+  const allHidden = participants.length > 0 && participants.every((p) => p.hiddenAt !== null);
+
+  if (!allHidden) {
+    // Мягкое скрытие — hard delete не выполняется.
+    return { participantIds: [] as string[], imageKeys: [] as string[], hardDeleted: false };
+  }
+
+  // Оба скрыли — hard delete.
   const messages = await prisma.message.findMany({
     where: { conversationId },
     select: { imageKey: true, imageThumbKey: true },
   });
   const imageKeys = messages.flatMap((m) => [m.imageKey, m.imageThumbKey].filter((k): k is string => !!k));
-  const participantIds = conversation.participants.map((p) => p.userId);
+  const participantIds = participants.map((p) => p.userId);
   await prisma.conversation.delete({ where: { id: conversationId } });
-  return { participantIds, imageKeys };
+  await getRedis().del(convCacheKey(conversationId)).catch(() => undefined);
+  return { participantIds, imageKeys, hardDeleted: true };
 }
 
 export async function markRead(conversationId: string, userId: string): Promise<void> {
@@ -263,6 +385,12 @@ export async function checkMessageRate(userId: string): Promise<void> {
 
 export async function createMessage(input: { conversationId: string; userId: string; text: string; imageKey?: string }) {
   await assertParticipant(input.conversationId, input.userId);
+  // П.28: бан проверяется при каждой отправке — забаненный не пишет
+  // ни через сокет, ни через REST.
+  const sender = await prisma.user.findUnique({ where: { id: input.userId }, select: { isBanned: true } });
+  if (!sender || sender.isBanned) {
+    throw new AppError(errorCodes.FORBIDDEN, 'Аккаунт заблокирован', 403);
+  }
   await checkMessageRate(input.userId);
   // Фото в чате: ключ обязан быть из чат-presign-сета (scope=chat), иначе
   // чужой ключ из сета листингов позволил бы прикрепить чужое фото.
@@ -277,8 +405,8 @@ export async function createMessage(input: { conversationId: string; userId: str
     }
     await redis.srem(setKey, input.imageKey);
     await verifyImageObject(input.imageKey);
-    const processed = await processImage(input.imageKey);
-    await deleteObject(input.imageKey);
+    const processed = await processImage(input.imageKey, 'chat');
+    await deleteSourceAfterProcess(input.imageKey, processed);
     imageKey = processed.fullKey;
     imageThumbKey = processed.thumbKey;
   }

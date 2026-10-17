@@ -16,12 +16,21 @@ import conversationRoutes from './routes/conversations.js';
 import orderRoutes from './routes/orders.js';
 import webhookRoutes from './routes/webhooks.js';
 import uploadRoutes from './routes/uploads.js';
+import fileRoutes from './routes/files.js';
 import reviewRoutes from './routes/reviews.js';
 import reportRoutes from './routes/reports.js';
 import adminRoutes from './routes/admin.js';
 
 export function createApp(): Express {
   const app = express();
+
+  // П.25: в production капча обязательна — при выключенной SMARTCAPTCHA
+  // шлём громкий warn при старте, чтобы пропуск не остался незамеченным.
+  if (isProd && !env.SMARTCAPTCHA_ENABLED) {
+    logger.warn(
+      'SECURITY WARNING: SMARTCAPTCHA отключена в production — регистрация и вход открыты для ботов. Включите SMARTCAPTCHA_ENABLED=true.'
+    );
+  }
 
   app.disable('x-powered-by');
 
@@ -39,21 +48,13 @@ export function createApp(): Express {
         contentSecurityPolicy: {
           directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", 'https://yookassa.ru', 'https://*.yookassa.ru'],
-            imgSrc: ["'self'", 'data:', 'blob:', 'http://s3.rinokru.com', 'https://s3.rinokru.com', 'https:', 'http:'],
+            // Аудит п.34: без 'unsafe-inline' — API отдаёт JSON, инлайн-скриптов нет.
+            scriptSrc: ["'self'", 'https://yookassa.ru', 'https://*.yookassa.ru'],
+            // Аудит п.34: без wildcard-схем http:/https: — только self, data, blob и домен S3.
+            imgSrc: ["'self'", 'data:', 'blob:', 'https://s3.rinokru.com', 'http://s3.rinokru.com'],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            connectSrc: [
-              "'self'",
-              'http://rinokru.com',
-              'https://rinokru.com',
-              'http://s3.rinokru.com',
-              'https://s3.rinokru.com',
-              'ws://rinokru.com',
-              'wss://rinokru.com',
-              'http://localhost:3000',
-              'http://localhost:4000',
-              'http://localhost:9000',
-            ],
+            // Аудит п.34: в production без localhost/127.0.0.1 и http://.
+            connectSrc: ["'self'", 'https://rinokru.com', 'wss://rinokru.com', 'https://s3.rinokru.com'],
             frameSrc: ["'self'", 'https://yookassa.ru', 'https://*.yookassa.ru'],
           },
         },
@@ -114,6 +115,7 @@ export function createApp(): Express {
   app.use('/api/conversations', conversationRoutes);
   app.use('/api/orders', orderRoutes);
   app.use('/api/uploads', uploadRoutes);
+  app.use('/api/files', fileRoutes);
   app.use('/api/reviews', reviewRoutes);
   app.use('/api/reports', reportRoutes);
   app.use('/api/admin', adminRoutes);

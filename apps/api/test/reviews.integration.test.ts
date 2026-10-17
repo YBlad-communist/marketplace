@@ -3,7 +3,7 @@ import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
-import { isInfraAvailable } from './helpers.js';
+import { isInfraAvailable, markPhoneVerified } from './helpers.js';
 import { installYookassaFake } from './yookassa-fake.js';
 
 // Мокаем сеть ЮKassa: реальные createEscrowOrder/releaseOrder/refundOrder,
@@ -67,7 +67,15 @@ beforeAll(async () => {
 
   const buyerPhone = `+7${Date.now().toString().slice(-9)}2`;
   buyerToken = await registerAndLogin('Покупатель отзывов', buyerPhone);
+  await markPhoneVerified(buyerPhone);
   buyerId = (await prisma.user.findUniqueOrThrow({ where: { phone: buyerPhone } })).id;
+  // Аудит п.17: свободный отзыв без сделки доступен с 7-го дня аккаунта —
+  // «состариваем» основного покупателя, чтобы существующий тест профильного
+  // отзыва проходил по новому правилу.
+  await prisma.user.update({
+    where: { id: buyerId },
+    data: { createdAt: new Date(Date.now() - 8 * 86_400_000) },
+  });
 
   const createListing = async (title: string, price: number) => {
     const res = await request(app)
@@ -119,10 +127,10 @@ describeInfra('reviews (integration): целостность рейтинга', 
 
   it('отклоняет отзыв по возвращённой (REFUNDED) сделке', async () => {
     const orderId = await createOrderAndPay(refundListingId, 'refund');
-    const refund = await request(app)
-      .post(`/api/orders/${orderId}/refund`)
-      .set('Authorization', `Bearer ${buyerToken}`);
-    expect(refund.status).toBe(200);
+    // Аудит п.5: покупатель сам не возвращает оплаченный заказ — статус
+    // REFUNDED выставляем напрямую (сценарий теста — проверка guard'а отзыва).
+    await prisma.order.update({ where: { id: orderId }, data: { status: 'REFUNDED' } });
+    await prisma.listing.update({ where: { id: refundListingId }, data: { status: 'ACTIVE' } });
     const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(order.status).toBe('REFUNDED');
 
@@ -174,5 +182,50 @@ describeInfra('reviews (integration): целостность рейтинга', 
       .set('Authorization', `Bearer ${buyerToken}`)
       .send({ revieweeId: buyerId, rating: 5, text: 'Сам себе' });
     expect(res.status).toBe(400);
+  });
+
+  it('п.17: свободный отзыв без подтверждённого телефона -> 403', async () => {
+    const phone = `+7${Date.now().toString().slice(-9)}7`;
+    const token = await registerAndLogin('Без-телефона-отзыв', phone);
+    const user = await prisma.user.findUniqueOrThrow({ where: { phone } });
+    await prisma.user.update({ where: { id: user.id }, data: { createdAt: new Date(Date.now() - 30 * 86_400_000) } });
+
+    const res = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ revieweeId: sellerId, rating: 5, text: 'Отзыв без телефона' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/телефон/i);
+  });
+
+  it('п.17: свободный отзыв с аккаунтом младше 7 дней -> 403', async () => {
+    const phone = `+7${Date.now().toString().slice(-9)}8`;
+    const token = await registerAndLogin('Свежий-аккаунт-отзыв', phone);
+    await markPhoneVerified(phone);
+
+    const res = await request(app)
+      .post('/api/reviews')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ revieweeId: sellerId, rating: 5, text: 'Отзыв со свежего аккаунта' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/7/);
+  });
+
+  it('п.17: гонка двух параллельных свободных отзывов одного автора — ровно один 201 (уникальный индекс)', async () => {
+    const phoneA = `+7${Date.now().toString().slice(-9)}3`;
+    const tokenA = await registerAndLogin('Гонка-отзыв-А', phoneA);
+    await markPhoneVerified(phoneA);
+    await prisma.user.updateMany({
+      where: { phone: phoneA },
+      data: { createdAt: new Date(Date.now() - 30 * 86_400_000) },
+    });
+
+    const payload = { revieweeId: sellerId, rating: 4, text: 'Параллельный свободный отзыв' };
+    const [a, b] = await Promise.all([
+      request(app).post('/api/reviews').set('Authorization', `Bearer ${tokenA}`).send(payload),
+      request(app).post('/api/reviews').set('Authorization', `Bearer ${tokenA}`).send(payload),
+    ]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([201, 409]);
   });
 });

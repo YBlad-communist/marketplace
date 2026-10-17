@@ -3,7 +3,7 @@ import request from 'supertest';
 import { prisma } from '@marketplace/db';
 import { connectRedis, disconnectRedis } from '../src/lib/redis.js';
 import { createApp } from '../src/app.js';
-import { isInfraAvailable } from './helpers.js';
+import { isInfraAvailable, markPhoneVerified } from './helpers.js';
 import { installYookassaFake } from './yookassa-fake.js';
 
 // Считаем ВСЕ вызовы capture: двойная выплата = capture вызван
@@ -21,6 +21,7 @@ const unique = Date.now();
 let sellerToken = '';
 let listingIds: string[] = [];
 let buyerToken = '';
+let adminToken = '';
 
 async function makePaidOrder(keySuffix: string): Promise<{ orderId: string; listingId: string }> {
   const usedListing = listingIds.shift();
@@ -47,8 +48,16 @@ beforeAll(async () => {
 
   const buyerPhone = `+7${unique.toString().slice(-9)}9`;
   await request(app).post('/api/auth/register').send({ name: 'Покупатель-параллель', phone: buyerPhone, password, confirmPassword: password });
+  await markPhoneVerified(buyerPhone);
   const buyer = await request(app).post('/api/auth/login').send({ phone: buyerPhone, password });
   buyerToken = buyer.body.data.accessToken as string;
+
+  const adminPhone = `+7${unique.toString().slice(-9)}7`;
+  await request(app).post('/api/auth/register').send({ name: 'Админ-параллель', phone: adminPhone, password, confirmPassword: password });
+  const adminUser = await prisma.user.findUniqueOrThrow({ where: { phone: adminPhone } });
+  await prisma.user.update({ where: { id: adminUser.id }, data: { role: 'ADMIN' } });
+  const adminLogin = await request(app).post('/api/auth/login').send({ phone: adminPhone, password });
+  adminToken = adminLogin.body.data.accessToken as string;
 
   const makeListing = async (i: number) => {
     const res = await request(app)
@@ -103,11 +112,18 @@ describeInfra('release: параллельный вызов не даёт дво
     fake.calls.cancel = 0;
     fake.calls.refund = 0;
 
-    const res = await request(app)
+    // Покупатель: гейт п.5 (только PENDING) -> 403, до статусных проверок не доходит.
+    const buyerRes = await request(app)
       .post(`/api/orders/${orderId}/refund`)
       .set('Authorization', `Bearer ${buyerToken}`);
-    expect(res.status).toBe(409);
-    expect(res.body.error.code).toBe('CONFLICT');
+    expect(buyerRes.status).toBe(403);
+
+    // Staff: доходит до статусной проверки RELEASING -> 409.
+    const adminRes = await request(app)
+      .post(`/api/orders/${orderId}/refund`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(adminRes.status).toBe(409);
+    expect(adminRes.body.error.code).toBe('CONFLICT');
     const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(order.status).toBe('RELEASING');
     expect(fake.calls.cancel).toBe(0);

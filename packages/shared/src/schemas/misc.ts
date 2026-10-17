@@ -110,7 +110,9 @@ export const usersMeUpdateSchema = z
       .transform((v) => (v === '' ? '' : normalizePhone(v)))
       .optional(),
     city: z.string().trim().max(120).optional().or(z.literal('')),
-    avatarUrl: z.string().url().max(500).optional().or(z.literal('')),
+    // Аватар меняется ТОЛЬКО через POST /users/me/avatar/confirm (п.18 аудита):
+    // avatarUrl в PATCH не принимаем — иначе пользователь мог подставить
+    // произвольный URL и при удалении аккаунта «удалить» чужой файл из S3.
   })
   .refine((d) => Object.keys(d).length > 0, { message: 'Нет полей для обновления' });
 

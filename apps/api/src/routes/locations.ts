@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { prisma } from '@marketplace/db';
+import { optionalAuthenticate, requireModeratorForAll } from '../middleware/auth.js';
 
 const router: Router = Router();
 
 // GET /api/regions — регионы с городами внутри (публично — только активные).
-router.get('/regions', async (req, res, next) => {
+// ?all=1 (включить неактивные) — только MODERATOR/ADMIN (аудит п.39).
+router.get('/regions', optionalAuthenticate, requireModeratorForAll, async (req, res, next) => {
   try {
     const onlyActive = req.query.all !== '1';
     const regions = await prisma.region.findMany({
