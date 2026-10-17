@@ -90,6 +90,14 @@ enum PaymentProvider {
   MOCK
 }
 
+// Режим выплаты продавцу: account — расширенный счёт (Монета)/магазин (ЮKassa);
+// card/npd — карты и НПД, пока не настроены у провайдера Монета.
+enum PayoutMode {
+  ACCOUNT
+  CARD
+  NPD
+}
+
 model User {
     id                 String                     @id @default(cuid())
     email              String?                    @unique
@@ -110,6 +118,7 @@ model User {
   // переезда (обслуживаются до полного перехода, удаление — отдельным решением).
   payoutAccountId    String?
   payoutOnboarded    Boolean                    @default(false)
+  payoutMode         PayoutMode                 @default(ACCOUNT)
   yookassaShopId     String?
   yookassaOnboarded  Boolean                    @default(false)
   emailVerifiedAt    DateTime?

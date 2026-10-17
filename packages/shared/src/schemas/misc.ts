@@ -34,9 +34,11 @@ export const sellerYookassaConnectSchema = z.object({
  * Провайдер-нейтральная схема подключения выплат: поле называется accountRef
  * (Shop ID ЮKassa / номер расширенного счёта Монеты). Старая shopId-схема
  * сохранена для совместимости legacy-клиентов.
+ * payoutMode: account — расширенный счёт; card/npd — пока не настроены у провайдера.
  */
 export const sellerPayoutConnectSchema = z.object({
   accountRef: z.string().trim().min(1, 'Укажите реквизит счёта продавца').max(64),
+  payoutMode: z.enum(['account', 'card', 'npd']).optional(),
 });
 
 export const reviewCreateSchema = z.object({

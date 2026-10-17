@@ -210,7 +210,10 @@ router.post(
   async (req, res, next) => {
     try {
       const accountRef = req.body.accountRef ?? req.body.shopId;
-      const result = await ensureSellerPayout(req.userId!, accountRef);
+      const payoutMode = req.body.payoutMode
+        ? (String(req.body.payoutMode).toUpperCase() as 'ACCOUNT' | 'CARD' | 'NPD')
+        : undefined;
+      const result = await ensureSellerPayout(req.userId!, accountRef, payoutMode);
       res.json({ data: { ...result, shopId: result.accountRef } });
     } catch (err) {
       next(err);

@@ -29,6 +29,9 @@ export type NormalizedPaymentStatus =
 /** Сумма в копейках (целое число). */
 export type Kopecks = number;
 
+/** Режим выплаты продавцу: account — расширенный счёт; card/npd — пока не настроены. */
+export type SellerPayoutMode = 'account' | 'card' | 'npd';
+
 /**
  * «Платёжный якорь» для фронта:
  * - confirmation_token — виджет ЮKassa (CheckoutModal);
@@ -77,6 +80,12 @@ export interface PaymentStatusResult {
    * открытия оплаты по существующему idempotencyKey заказа.
    */
   anchor?: PaymentAnchor;
+  /**
+   * Сумма операции у провайдера в копейках (Монета: op.amount; ЮKassa:
+   * payment.amount.value). Используется paymentService для сверки с суммой
+   * заказа при переводе в PAID (защита от подмены суммы вебхуком).
+   */
+  amountKopecks?: Kopecks;
 }
 
 export interface PaymentConfirmResult {
@@ -149,6 +158,8 @@ export interface PaymentConfirmTransfer {
   amountKopecks: Kopecks;
   /** Комиссия платформы в копейках (остаётся на транзитном счёте). */
   platformFeeKopecks: Kopecks;
+  /** Режим выплаты продавцу (Монета: account — расширенный счёт; card/npd — пока не настроены). */
+  payoutMode?: SellerPayoutMode;
 }
 
 export interface PaymentProvider {

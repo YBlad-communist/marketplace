@@ -317,6 +317,7 @@ export function publicUser(user: {
   yookassaOnboarded: boolean;
   payoutAccountId?: string | null;
   payoutOnboarded?: boolean;
+  payoutMode?: string;
   createdAt: Date;
 }) {
   return {
@@ -335,6 +336,7 @@ export function publicUser(user: {
     yookassaOnboarded: user.yookassaOnboarded,
     payoutAccountId: user.payoutAccountId ?? null,
     payoutOnboarded: Boolean(user.payoutOnboarded),
+    payoutMode: user.payoutMode ?? 'ACCOUNT',
     createdAt: user.createdAt,
   };
 }

@@ -102,7 +102,8 @@ export async function ensureSellerYookassa(sellerId: string, shopId: string): Pr
 /** Провайдер-нейтральное подключение: сохраняет accountRef в payoutAccountId. */
 export async function ensureSellerPayout(
   sellerId: string,
-  accountRef: string
+  accountRef: string,
+  payoutMode?: 'ACCOUNT' | 'CARD' | 'NPD'
 ): Promise<{ accountRef: string }> {
   const seller = await prisma.user.findUnique({ where: { id: sellerId } });
   if (!seller) throw new AppError(errorCodes.NOT_FOUND, 'Продавец не найден', 404);
@@ -150,6 +151,7 @@ export async function ensureSellerPayout(
       yookassaOnboarded: true,
       payoutAccountId: normalized,
       payoutOnboarded: true,
+      ...(payoutMode ? { payoutMode } : {}),
     },
   });
   return { accountRef: normalized };
@@ -159,6 +161,7 @@ export async function ensureSellerPayout(
 export async function getSellerPayoutStatus(sellerId: string): Promise<{
   payoutAccountId: string | null;
   payoutOnboarded: boolean;
+  payoutMode: string;
   // legacy-фолбэк
   yookassaShopId: string | null;
   yookassaOnboarded: boolean;
@@ -168,6 +171,7 @@ export async function getSellerPayoutStatus(sellerId: string): Promise<{
     select: {
       payoutAccountId: true,
       payoutOnboarded: true,
+      payoutMode: true,
       yookassaShopId: true,
       yookassaOnboarded: true,
     },
@@ -175,6 +179,7 @@ export async function getSellerPayoutStatus(sellerId: string): Promise<{
   return {
     payoutAccountId: user?.payoutAccountId ?? null,
     payoutOnboarded: Boolean(user?.payoutOnboarded),
+    payoutMode: user?.payoutMode ?? 'ACCOUNT',
     yookassaShopId: user?.yookassaShopId ?? null,
     yookassaOnboarded: Boolean(user?.yookassaOnboarded),
   };
@@ -443,6 +448,7 @@ export async function performRelease(order: {
   const amountNum = Number(order.amount);
   const fee = platformFeeForAmount(amountNum);
   let sellerRef: string | null = null;
+  let payoutMode: 'account' | 'card' | 'npd' | undefined;
   if (provider.name === 'moneta') {
     const withSeller = await prisma.order.findUnique({
       where: { id: order.id },
@@ -451,18 +457,20 @@ export async function performRelease(order: {
     sellerRef = withSeller?.listing.seller
       ? sellerAccountRef(withSeller.listing.seller)
       : null;
-    if (!sellerRef) {
+    if (!sellerRef || !withSeller) {
       throw new AppError(
         errorCodes.INTERNAL,
         'Монета: у продавца нет реквизитов счёта для выплаты',
         500
       );
     }
+    payoutMode = (withSeller.listing.seller.payoutMode ?? 'ACCOUNT').toLowerCase() as 'account' | 'card' | 'npd';
   }
   const confirmed = await provider.confirm(order.providerPaymentId, captureKeyFor(order.id), {
     sellerAccountRef: sellerRef ?? '',
     amountKopecks: toKopecks(amountNum - fee),
     platformFeeKopecks: toKopecks(fee),
+    payoutMode,
   });
   if (confirmed.status !== 'captured') {
     throw new AppError(errorCodes.CONFLICT, 'Платёж не может быть завершён', 409);
@@ -912,11 +920,29 @@ export async function handlePaymentWebhook(
     switch (payment.status) {
       case 'authorized': {
         // Эскроу: средства авторизованы и удерживаются платформой.
+        // Аудит: сверка суммы операции провайдера с суммой заказа — при
+        // расхождении НЕ переводим в PAID, пишем в лог и уведомляем админа.
         if (orderKey) {
-          await prisma.order.updateMany({
-            where: { idempotencyKey: orderKey, status: 'PENDING' },
-            data: { status: 'PAID' },
+          const order = await prisma.order.findUnique({
+            where: { idempotencyKey: orderKey },
+            select: { id: true, status: true, amount: true },
           });
+          if (order && order.status === 'PENDING') {
+            const orderKopecks = toKopecks(order.amount);
+            if (payment.amountKopecks !== undefined && payment.amountKopecks !== orderKopecks) {
+              logger.warn(
+                { orderId: order.id, orderKey, paymentId, providerAmountKopecks: payment.amountKopecks, orderAmountKopecks: orderKopecks },
+                'payment amount mismatch; order NOT marked PAID'
+              );
+              await notifyAdmin(
+                'Расхождение суммы платежа',
+                `Заказ ${order.id}: у провайдера ${payment.amountKopecks / 100} ₽, ` +
+                  `в заказе ${Number(order.amount)} ₽. Заказ не переведён в PAID — требуется ручная проверка.`
+              );
+            } else {
+              await prisma.order.update({ where: { id: order.id }, data: { status: 'PAID' } });
+            }
+          }
         }
         break;
       }
@@ -924,17 +950,31 @@ export async function handlePaymentWebhook(
         // Captured наступает ПОСЛЕ confirm в releaseOrder (или вручную из
         // кабинета провайдера). Никогда не делаем авто-RELEASE без подтверждения
         // покупателя: только доводим PENDING/PAID до PAID.
+        // Аудит: сверка суммы (как в authorized).
         if (orderKey) {
           const existing = await prisma.order.findUnique({
             where: { idempotencyKey: orderKey },
-            select: { id: true, status: true },
+            select: { id: true, status: true, amount: true },
           });
           if (existing && (existing.status === 'PENDING' || existing.status === 'PAID')) {
-            await prisma.order.update({
-              where: { id: existing.id },
-              data: { status: 'PAID' },
-            });
-            logger.info({ orderKey, paymentId }, 'escrow authorized, awaiting buyer confirmation');
+            const orderKopecks = toKopecks(existing.amount);
+            if (payment.amountKopecks !== undefined && payment.amountKopecks !== orderKopecks) {
+              logger.warn(
+                { orderId: existing.id, orderKey, paymentId, providerAmountKopecks: payment.amountKopecks, orderAmountKopecks: orderKopecks },
+                'payment amount mismatch (captured); order NOT marked PAID'
+              );
+              await notifyAdmin(
+                'Расхождение суммы платежа (capture)',
+                `Заказ ${existing.id}: у провайдера ${payment.amountKopecks / 100} ₽, ` +
+                  `в заказе ${Number(existing.amount)} ₽. Заказ не переведён в PAID — требуется ручная проверка.`
+              );
+            } else {
+              await prisma.order.update({
+                where: { id: existing.id },
+                data: { status: 'PAID' },
+              });
+              logger.info({ orderKey, paymentId }, 'escrow authorized, awaiting buyer confirmation');
+            }
           }
         }
         break;

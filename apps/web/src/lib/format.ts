@@ -1,4 +1,4 @@
-export function formatPrice(value: number | string, currency = 'EUR'): string {
+export function formatPrice(value: number | string, currency = 'RUB'): string {
   const num = typeof value === 'string' ? Number(value) : value;
   return new Intl.NumberFormat('ru-RU', {
     style: 'currency',

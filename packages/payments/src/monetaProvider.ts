@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { AppError, errorCodes } from '@marketplace/shared';
 import type {
   CreateHoldResult,
@@ -84,6 +85,18 @@ export class MonetaProvider implements PaymentProvider {
   ): Promise<PaymentConfirmResult> {
     if (!transfer?.sellerAccountRef) {
       throw new AppError(errorCodes.INTERNAL, 'Монета: confirm требует реквизиты продавца', 500);
+    }
+    // П.4: режим выплат. card/npd пока не поддержаны Монетой через Merchant API.
+    // TODO: Реализовать выплаты на карту (card) и по НПД (npd), когда Монета
+    // поддержит их. См. docs.moneta.ru — раздел «Выплаты»:
+    // https://docs.moneta.ru/solutions/marketplaces/
+    if (transfer.payoutMode && transfer.payoutMode !== 'account') {
+      throw new AppError(
+        errorCodes.PAYMENT_REQUIRED,
+        `Режим выплат «${transfer.payoutMode}» не настроен у провайдера Монета. ` +
+          'Временно доступен только перевод на расширенный счёт (account).',
+        402
+      );
     }
     const op = await this.resolveOperation(providerPaymentId);
     if (!op) {
@@ -184,6 +197,7 @@ export class MonetaProvider implements PaymentProvider {
         providerPaymentId,
         status: normalizeMonetaStatus(op.statusId),
         orderKey: op.clientTransaction,
+        amountKopecks: op.amount ? Math.round(Number(op.amount) * 100) : undefined,
       };
     }
     const op = await this.resolveOperation(providerPaymentId);
@@ -196,6 +210,7 @@ export class MonetaProvider implements PaymentProvider {
       providerPaymentId,
       status: normalizeMonetaStatus(op.statusId),
       orderKey: op.clientTransaction ?? providerPaymentId,
+      amountKopecks: op.amount ? Math.round(Number(op.amount) * 100) : undefined,
     };
   }
 
@@ -246,11 +261,16 @@ export class MonetaProvider implements PaymentProvider {
       operationId,
       amount: params.MNT_AMOUNT ?? '',
       currency: params.MNT_CURRENCY_CODE ?? '',
+      subscriberId: params.MNT_SUBSCRIBER_ID,
       testMode: params.MNT_TEST_MODE ?? '0',
       checkCode: paymentEnv.MONETA_ACCOUNT_CODE!,
     });
+    // Аудит: сравнение через timingSafeEqual (буферы одинаковой длины),
+    // чтобы не утечь время сравнения при подборе подписи.
     // Коды могут приходить в upper/lower hex — сравниваем без регистра.
-    if (signature.toLowerCase() !== expected.toLowerCase()) {
+    const sigBuf = Buffer.from(signature.toLowerCase(), 'utf8');
+    const expBuf = Buffer.from(expected.toLowerCase(), 'utf8');
+    if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
       logger.warn({ transactionId }, 'moneta webhook: bad MNT_SIGNATURE');
       throw new AppError(errorCodes.UNAUTHORIZED, 'Неверная подпись уведомления', 401);
     }
